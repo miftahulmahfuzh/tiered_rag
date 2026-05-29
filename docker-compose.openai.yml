@@ -1,0 +1,41 @@
+# Real-OpenAI variant of the stack: one real OpenAI model does the routing (Tier-1)
+# AND generates natural answers behind all three tiers. No mock LLM workers needed
+# (build_llm returns a single OpenAICompatLLM when LLM_TYPE=openai).
+#
+# Prereqs:
+#   - OPENAI_API_KEY set in the gitignored .env (compose substitutes ${...} from it)
+#   - ollama serving on 0.0.0.0 (RAG embeddings are always real) -> ./deploy_ollama.sh
+#
+# Usage:
+#   docker compose -f docker-compose.openai.yml up -d --build
+#   python -m tiered_rag.ingest
+#   curl -s localhost:8000/chat -H 'content-type: application/json' -d '{"query":"how do I reset my password?"}'
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333", "6334:6334"]
+    volumes: ["./qdrant_storage:/qdrant/storage"]
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  # real-OpenAI, cache-backed gateway — one model behind routing + all three tiers
+  gateway:
+    build: .
+    command: uvicorn tiered_rag.api:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    environment:
+      LLM_TYPE: openai
+      # real model — key lives only in the host .env; model/base-url overridable, with sane defaults
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-nano}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_HOST: http://host.docker.internal:11434
+      # Phase 8: Telegram front-end — pass through from the host .env (kept out of this file)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [redis, qdrant]
