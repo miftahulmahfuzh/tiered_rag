@@ -14,6 +14,8 @@ dependencies = [
     "openpyxl>=3.1",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [tool.setuptools.packages.find]
@@ -23,3 +25,7 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 markers = ["integration: hits real ollama/qdrant (deselect with -m 'not integration')"]
+filterwarnings = [
+    # starlette 1.2.0's TestClient warns about httpx; third-party, not our code.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
