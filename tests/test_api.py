@@ -27,3 +27,20 @@ def test_chat_returns_routed_tier_and_stub_answer():
     assert body["tier"] == 2
     assert body["reason"] == "needs a lookup"
     assert "stub" in body["answer"].lower()
+
+
+def test_chat_includes_token_usage():
+    canned = json.dumps({"tier": 1, "reason": "greeting", "plan": None})
+    body = _client_with_canned(canned).post("/chat", json={"query": "hello"}).json()
+    assert body["usage"]["total_tokens"] > 0
+    assert body["usage"]["cost_usd"] >= 0
+
+
+def test_usage_endpoint_counts_requests_and_cost():
+    canned = json.dumps({"tier": 2, "reason": "lookup", "plan": None})
+    client = _client_with_canned(canned)  # fresh app -> fresh UsageLog
+    client.post("/chat", json={"query": "status of order #1?"})
+    client.post("/chat", json={"query": "status of order #2?"})
+    summary = client.get("/usage").json()
+    assert summary["requests"] == 2
+    assert summary["total_cost_usd"] >= 0

@@ -36,3 +36,11 @@ def test_router_falls_back_to_tier_1_on_garbage():
     sel = Router(FakeLLM("not json")).route("blah")
     assert sel.tier == 1
     assert "fallback" in sel.reason.lower()
+
+
+def test_route_detailed_exposes_usage():
+    from tiered_rag.router import RouteResult
+    res = Router(FakeLLM(_canned)).route_detailed("hi there!")
+    assert isinstance(res, RouteResult)
+    assert res.selection.tier == 1
+    assert res.usage.total_tokens > 0

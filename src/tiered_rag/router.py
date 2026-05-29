@@ -1,14 +1,22 @@
 import json
+from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from .llm.client import LLMClient
+from .llm.usage import TokenUsage
 
 
 class TierSelection(BaseModel):
     tier: int = Field(ge=1, le=3)
     reason: str = ""
     plan: str | None = None
+
+
+@dataclass
+class RouteResult:
+    selection: TierSelection
+    usage: TokenUsage
 
 
 ROUTER_SYSTEM = """You are the Tier-1 router for a game-store support chatbot.
@@ -43,9 +51,13 @@ class Router:
     def __init__(self, llm: LLMClient, temperature: float = 0.0):
         self.llm, self.temperature = llm, temperature
 
-    def route(self, query: str) -> TierSelection:
-        raw = self.llm.complete(ROUTER_SYSTEM, query, temperature=self.temperature).content
+    def route_detailed(self, query: str) -> RouteResult:
+        resp = self.llm.complete(ROUTER_SYSTEM, query, temperature=self.temperature)
         try:
-            return TierSelection(**_extract_json(raw))
+            sel = TierSelection(**_extract_json(resp.content))
         except Exception:
-            return TierSelection(tier=1, reason="router parse fallback", plan=None)
+            sel = TierSelection(tier=1, reason="router parse fallback", plan=None)
+        return RouteResult(selection=sel, usage=resp.usage)
+
+    def route(self, query: str) -> TierSelection:
+        return self.route_detailed(query).selection
