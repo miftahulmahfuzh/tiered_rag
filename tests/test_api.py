@@ -78,6 +78,15 @@ def test_chat_caches_and_serves_a_repeat_query(client_with_inmemory_cache):
     assert spy.calls == 1                             # orchestrator ran only for the cold miss
 
 
+def test_stats_endpoint_reports_by_tier_savings_and_cache(fake_embedder):
+    client = _client_with_orchestrator(build_orchestrator(fake_embedder, 2))
+    client.post("/chat", json={"query": "full details for SKU-07"})
+    stats = client.get("/stats").json()
+    assert "by_tier" in stats and "savings" in stats and "cache" in stats
+    assert "savings_pct" in stats["savings"]
+    assert "hit_rate" in stats["cache"]
+
+
 def test_chat_does_not_cache_escalations(fake_embedder):
     # an escalated (pending_review) answer must NOT be cached -> the gap keeps alerting
     from tests._helpers import build_cached_client

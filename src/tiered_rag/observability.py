@@ -54,3 +54,35 @@ class UsageLog:
     @property
     def total_cost(self) -> float:
         return round(sum(r.cost_usd for r in self.records), 8)
+
+    def by_tier(self) -> dict:
+        out: dict[int, dict] = {}
+        for r in self.records:
+            t = out.setdefault(r.tier, {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                                        "total_tokens": 0, "cost_usd": 0.0, "_lat": 0.0})
+            t["requests"] += 1
+            t["prompt_tokens"] += r.prompt_tokens
+            t["completion_tokens"] += r.completion_tokens
+            t["total_tokens"] += r.total_tokens
+            t["cost_usd"] = round(t["cost_usd"] + r.cost_usd, 8)
+            t["_lat"] += r.latency_ms
+        for t in out.values():
+            t["avg_latency_ms"] = round(t.pop("_lat") / t["requests"], 2)
+        return out
+
+    def savings_vs_all_tier3(self, settings: Settings) -> dict:
+        actual = sum(r.cost_usd for r in self.records)
+        hypothetical = sum(
+            estimate_cost(3, TokenUsage(r.prompt_tokens, r.completion_tokens), settings)
+            for r in self.records
+        )
+        savings = hypothetical - actual
+        pct = (savings / hypothetical) if hypothetical else 0.0
+        return {"actual_cost_usd": round(actual, 8), "all_tier3_cost_usd": round(hypothetical, 8),
+                "savings_usd": round(savings, 8), "savings_pct": round(pct, 4)}
+
+    def cache_stats(self) -> dict:
+        hits = sum(1 for r in self.records if r.cached)
+        total = len(self.records)
+        return {"requests": total, "cache_hits": hits, "cache_misses": total - hits,
+                "hit_rate": round(hits / total, 4) if total else 0.0}

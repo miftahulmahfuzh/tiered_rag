@@ -148,7 +148,15 @@ def create_app() -> FastAPI:
 
     @app.get("/usage")
     def usage_summary(usage_log: UsageLog = Depends(get_usage_log)):
-        return {"requests": len(usage_log.records), "total_cost_usd": usage_log.total_cost}
+        return {"requests": len(usage_log.records), "total_cost_usd": usage_log.total_cost,
+                "cache": usage_log.cache_stats()}
+
+    @app.get("/stats")
+    def stats(usage_log: UsageLog = Depends(get_usage_log),
+              settings: Settings = Depends(get_settings_dep)):
+        return {"by_tier": usage_log.by_tier(),
+                "savings": usage_log.savings_vs_all_tier3(settings),
+                "cache": usage_log.cache_stats()}
 
     return app
 
