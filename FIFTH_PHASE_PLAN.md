@@ -4,6 +4,30 @@
 > implement this plan task-by-task. Use superpowers-extended-cc:test-driven-development
 > for every task (RED → GREEN → COMMIT).
 
+> ## ✅ STATUS: COMPLETE (2026-05-29)
+>
+> All 5 tasks (0–4) implemented TDD-style (RED → GREEN → COMMIT) and committed to `main`.
+> **79 tests pass** (78 offline + 1 live `@integration`; 4 integration tests skip when their
+> services are down). The guardrail stage is wired into `Orchestrator.run` exactly as designed:
+> abstain → `GapAlert(kind="abstain")` + honest "I don't know"; unsupported answer →
+> `GapAlert(kind="unverified")` + "Pending Human Specialist Review"; greeting / classification /
+> Tier-3 stub (no evidence) bypass verification. The verifier is **fail-closed**, its usage **folds
+> into `ExecutionResult.usage`**, and `/chat` dispatches the alert **async** via `BackgroundTasks`
+> while returning the new `verified` / `pending_review` fields. The Tier-1 mock recognises
+> `VERIFIER_MARKER` so the live-mock pipeline never spuriously escalates.
+>
+> **Commits:** `0f96f83` (alerting primitive) · `30cdeb0` (verifier) · `b4880e8` (orchestrator
+> guardrail) · `db8546e` (`/chat` wiring) · `ca3f4c1` (verifier-aware mock + integration test +
+> README).
+>
+> **As-built deltas (read before reusing a snippet verbatim):**
+> - `alerting.py` ships **without** the optional `field` import the plan left in (it was unused —
+>   the plan itself flagged it as droppable). `asdict`, `dataclass` only.
+> - `.env.example` gained a **Phase-5 block** (`VERIFY_ANSWERS`, `ALERT_WEBHOOK_URL`) — not in the
+>   plan's file table, added for parity with the Phase-2/3 config blocks the README references.
+> - Everything else shipped **exactly** as the snippets below (verifier, orchestrator guardrail,
+>   `/chat` body, mock `_reply`, all tests).
+
 **Goal:** Make the chatbot **provably refuse to hallucinate**. Phase 4 produces a real answer plus
 the exact evidence it was built from (`ExecutionResult.final_input_context` + `tool_calls`). Phase 5
 adds a **guardrail stage** between synthesis and the user:
@@ -754,24 +778,24 @@ git commit -m "feat(p5): verifier-aware mock + guardrail integration test + READ
 
 ## Phase 5 Definition of Done
 
-- [ ] `pytest -m "not integration"` → all green, fully offline (FakeLLM + in-memory Qdrant + TestClient).
-- [ ] **Verifier agent** checks the synthesized answer against its evidence and **fails closed** on an
+- [x] `pytest -m "not integration"` → all green, fully offline (FakeLLM + in-memory Qdrant + TestClient).
+- [x] **Verifier agent** checks the synthesized answer against its evidence and **fails closed** on an
       unparseable verdict (`tiered_rag.verifier.Verifier`).
-- [ ] **Knowledge-gap alerting**: `Alerter` collects in-memory + logs a structured line + optionally
+- [x] **Knowledge-gap alerting**: `Alerter` collects in-memory + logs a structured line + optionally
       POSTs a webhook (best-effort, never raises); dispatched **async** from `/chat` via `BackgroundTasks`.
-- [ ] Guardrail wired into `Orchestrator.run`: abstain → `GapAlert(kind="abstain")` + honest "I don't
+- [x] Guardrail wired into `Orchestrator.run`: abstain → `GapAlert(kind="abstain")` + honest "I don't
       know"; unsupported answer → `GapAlert(kind="unverified")` + "Pending Human Specialist Review";
       greeting/classification/T3 (no evidence) bypass verification.
-- [ ] Verifier usage **folds into** `ExecutionResult.usage` (cost includes the guardrail call).
-- [ ] `/chat` returns `verified` + `pending_review`; `/usage` totals + Phase-4 answers stay green; all
+- [x] Verifier usage **folds into** `ExecutionResult.usage` (cost includes the guardrail call).
+- [x] `/chat` returns `verified` + `pending_review`; `/usage` totals + Phase-4 answers stay green; all
       Phase-1–4 tests untouched and passing.
-- [ ] Mock Tier-1 server recognises `VERIFIER_MARKER` (guard test in sync with `VERIFIER_SYSTEM`);
+- [x] Mock Tier-1 server recognises `VERIFIER_MARKER` (guard test in sync with `VERIFIER_SYSTEM`);
       `pytest -m integration` runs the guarded pipeline against live mocks (skips if down).
-- [ ] README Phase-5 section written. All work committed.
+- [x] README Phase-5 section written. All work committed.
 
-**Next:** write `SIXTH_PHASE_PLAN.md` (Tier-3 Multi-Step Reasoning) — the Tier-3 LLM generates a
-**chained plan** (step1 → step2 → step3, each step consuming the prior step's output), executed
+**Next:** `SIXTH_PHASE_PLAN.md` (Tier-3 Multi-Step Reasoning) is **written** — the Tier-3 LLM generates
+a **chained plan** (step1 → step2 → step3, each step consuming the prior step's output), executed
 sequentially with context threading into `final_input_context`, then a final grounded synthesis that
 **flows through the same Phase-5 guardrail** (verifier + knowledge-gap escalation). Phase 5's
 `Verifier` + `Alerter` are exactly the safety net Tier-3's longer reasoning chains need, and the
-`Tier2Executor` tool-dispatch loop is the pattern the Tier-3 chain executor will generalise.
+`Tier2Executor` tool-dispatch loop is the pattern the Tier-3 chain executor generalises.
