@@ -81,3 +81,15 @@ def test_phase7_worker_list_falls_back_to_single_url():
     s = Settings()
     assert s.tier_workers(1) == [s.mock_llm_base_url]      # no workers configured -> single tier-1 url
     assert s.tier_workers(2) == [s.mock_tier2_base_url]
+
+
+def test_phase8_telegram_defaults():
+    s = Settings()
+    assert s.telegram_bot_token == ""          # real value lives only in .env (gitignored)
+    assert s.telegram_webhook_secret == ""
+    assert s.telegram_api_base.startswith("https://api.telegram.org")
+
+
+def test_phase8_telegram_token_from_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    assert Settings().telegram_bot_token == "123:ABC"

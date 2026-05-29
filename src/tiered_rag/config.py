@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     mock_tier3_workers: str = ""
     health_check_timeout: float = 2.0
 
+    # --- Telegram front-end (Phase 8) ---
+    telegram_bot_token: str = ""          # REAL value only in gitignored .env (never a default)
+    telegram_webhook_secret: str = ""     # echoed by Telegram in X-Telegram-Bot-Api-Secret-Token
+    telegram_api_base: str = "https://api.telegram.org"
+
     def tier_workers(self, tier: int) -> list[str]:
         raw = {1: self.mock_tier1_workers, 2: self.mock_tier2_workers,
                3: self.mock_tier3_workers}.get(tier, "")
