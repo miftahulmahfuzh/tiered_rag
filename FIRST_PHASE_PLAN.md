@@ -4,6 +4,26 @@
 > implement this plan task-by-task. Use superpowers-extended-cc:test-driven-development
 > for every task (RED → GREEN → COMMIT).
 
+> ## ✅ STATUS: COMPLETE (2026-05-29)
+>
+> All 7 tasks implemented TDD-style and committed to `main`. **11 tests pass**
+> (10 offline + 1 real ollama+Qdrant integration). The full Definition of Done is met
+> (see the checked list at the bottom). A few things differ from this plan as originally
+> written — see **[As-Built Deltas](#as-built-deltas-what-differs-from-the-plan-above)**
+> at the end before reusing any snippet verbatim. Commit map:
+>
+> | Task | Commit | Subject |
+> |---|---|---|
+> | 0 | `26d5f9d` | project scaffolding + config |
+> | 1 | `470e26c` | knowledge_base.xlsx (20 Q&A) + loader |
+> | 2 | `9d68c2c` | Embedder protocol + OllamaEmbedder + FakeEmbedder |
+> | 3 | `673a4a2` | Qdrant store wrapper (in-memory testable) |
+> | 4 | `5e335a4` | ingest pipeline (xlsx → Qdrant) |
+> | 5 | `398f72b` | Retriever with confidence threshold + abstain state |
+> | 6 | `aa2a9fd` | abstention evaluation harness |
+> | 7 | `ddf0054` | qdrant compose + ollama integration test + README |
+> | fix | `f18cb87` | make package pip-installable (`python -m tiered_rag.ingest`) |
+
 **Goal:** Build a real semantic-search retrieval layer (ollama `nomic-embed-text:v1.5`
 + Qdrant) that returns matches with a confidence score and **abstains ("I don't know")**
 when the top score is below a configurable threshold.
@@ -30,6 +50,13 @@ real ollama + a real Qdrant.
 ---
 
 ## Task 0: Project scaffolding & config
+
+> ⚠️ **As-built:** `pyproject.toml` ended up larger than the minimal pytest-only block
+> below. `pythonpath = ["src"]` only affects *pytest*, so `python -m tiered_rag.ingest`
+> from the repo root failed with `ModuleNotFoundError`. Fixed by making the package
+> pip-installable (setuptools `[build-system]` + `[project]` + `packages.find`), installed
+> with `pip install -e .`. `.gitignore` also ignores `*.egg-info/`, `build/`, `dist/`.
+> See [As-Built Deltas](#as-built-deltas-what-differs-from-the-plan-above).
 
 **Files:**
 - Create: `requirements.txt`, `pyproject.toml` (pytest config), `.env.example`
@@ -264,6 +291,12 @@ git commit -m "feat(p1): Embedder protocol + OllamaEmbedder + FakeEmbedder"
 ---
 
 ## Task 3: Qdrant store wrapper
+
+> ⚠️ **As-built:** the installed `qdrant-client` (1.x) **deprecates** `recreate_collection`
+> and `search` (the snippet below triggers `DeprecationWarning`). The shipped code uses the
+> modern API instead — `collection_exists` + `delete_collection` + `create_collection` for
+> `recreate()`, and `query_points(...).points` for `search()` — keeping test output
+> warning-free. Same method signatures and `Hit` shape.
 
 **Files:**
 - Create: `src/tiered_rag/vector_store.py`
@@ -639,12 +672,58 @@ git commit -m "feat(p1): qdrant compose + ollama integration test + README"
 
 ## Phase 1 Definition of Done
 
-- [ ] `pytest -m "not integration"` → all green, fully offline.
-- [ ] `docker compose up -d qdrant` + `ollama pull nomic-embed-text:v1.5` +
-      `python -m tiered_rag.ingest` populates the collection.
-- [ ] `pytest -m integration` → real ollama+Qdrant: in-scope answered, out-of-scope abstains.
-- [ ] `retrieve()` returns a confidence score and an honest **"I don't know"** (abstain)
+- [x] `pytest -m "not integration"` → all green, fully offline. **(10 passed)**
+- [x] `docker compose up -d qdrant` + `ollama pull nomic-embed-text:v1.5` +
+      `python -m tiered_rag.ingest` populates the collection. **(20 rows ingested)**
+- [x] `pytest -m integration` → real ollama+Qdrant: in-scope answered, out-of-scope abstains. **(1 passed)**
+- [x] `retrieve()` returns a confidence score and an honest **"I don't know"** (abstain)
       below threshold.
-- [ ] README Phase-1 section written. All work committed.
+- [x] README Phase-1 section written. All work committed.
 
-**Next:** write `SECOND_PHASE_PLAN.md` (Tier Routing Engine) once Phase 1 is green.
+**Next:** ✅ `SECOND_PHASE_PLAN.md` (Tier Routing Engine) written — Phase 1 is green.
+
+---
+
+## As-Built Deltas (what differs from the plan above)
+
+The plan was followed task-by-task; these are the deviations and discoveries worth
+carrying forward into later phases:
+
+1. **Package is pip-installable (Task 0).** The minimal pytest-only `pyproject.toml` made
+   `python -m tiered_rag.ingest` fail from the repo root (`pythonpath=["src"]` is
+   pytest-only). Added setuptools build metadata + `[project]` + `[tool.setuptools.packages.find]`
+   (`where=["src"]`) and installed editable (`pip install -e .`). `.gitignore` gained
+   `*.egg-info/`, `build/`, `dist/`. *(commit `f18cb87`)*
+
+2. **Modern Qdrant API (Task 3).** `qdrant-client` 1.x deprecates `recreate_collection`
+   and `search`. Shipped code uses `collection_exists`/`delete_collection`/`create_collection`
+   and `query_points(...).points`. The installed Qdrant server is **v1.18.1**.
+
+3. **`tests/data/__init__.py` added (Task 6)** so `tests/data/eval_questions.py` imports
+   cleanly as a package. `eval_questions.py` holds **20 in-scope paraphrases** (one per KB
+   row) + **10 out-of-scope** questions.
+
+4. **Threshold calibration — a real finding.** Running the abstention eval against live
+   ollama + Qdrant at the locked default `CONFIDENCE_THRESHOLD=0.6`:
+
+   | Metric | Value |
+   |---|---|
+   | Abstention rate (out-of-scope) | **1.00** (perfect — zero leakage) |
+   | False-abstention rate (in-scope) | **0.15** (3/20 borderline paraphrases) |
+   | In-scope cosine score range | 0.566 – 0.750 |
+   | Out-of-scope cosine score range | 0.397 – 0.530 |
+
+   The classes separate cleanly (OOD max 0.530 < in-scope min 0.566), so a threshold of
+   **~0.55** would yield 0 false abstentions while still abstaining on all OOD. The locked
+   default `0.6` is left unchanged (it's env-configurable); **flagged for the Phase-8
+   `EVAL_REPORT.md`** tuning section.
+
+### Environment setup (as actually performed)
+
+- **Python:** dedicated conda env `tiered_rag` (Python 3.12); deps from `requirements.txt`
+  + editable install of the package.
+- **Qdrant:** `docker compose up -d qdrant` (image `qdrant/qdrant:latest` → v1.18.1).
+- **Ollama:** the official `install.sh` needs `sudo`; instead installed **userspace** —
+  extracted `ollama-linux-amd64.tar.zst` into `~/.local`, ran `~/.local/bin/ollama serve`
+  in the background, then `ollama pull nomic-embed-text:v1.5` (CPU, no GPU). Model is
+  137M params, ~274 MB, 768-dim as expected.

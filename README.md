@@ -1,6 +1,6 @@
 # tiered_rag
 
-A zero-hallucination, multi-tier support chatbot backend, built incrementally in
+A multi-tier support chatbot backend made using Python, built incrementally in
 **8 phases** (see [`MAJOR_PHASES.md`](MAJOR_PHASES.md)). This README grows phase by phase.
 
 ---
