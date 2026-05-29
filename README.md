@@ -143,3 +143,105 @@ pytest -m integration tests/test_integration_routing.py -s   # asserts accuracy 
 
 > **Result (2026-05-29):** with `OPENAI_MODEL=gpt-5.4-nano`, routing accuracy was **1.00**
 > across all six categories.
+
+---
+
+## Phase 3 — Mock-vs-Real LLM Backend + Token Logging
+
+Phase 3 makes the `LLM_TYPE=mock` path **real** and starts **counting tokens from day one**.
+Three deterministic mock tier servers run on separate ports, every LLM call surfaces its token
+`usage`, and the gateway logs a structured per-request cost record exposed via `/usage` — the
+observability backbone for the Phase-7 cost-savings story (Tier-1/2 routing vs all-Tier-3).
+
+### Three mock tier servers (separate ports)
+
+A single `create_mock_app(tier)` factory (`tiered_rag.mock_llm`) backs all three servers; each
+instance is pinned to its tier at launch. This is the brief's literal "mock local endpoints on
+different ports", with zero duplicated server code:
+
+| Service | Port | Speaks |
+|---|---|---|
+| `mock_tier1` | 9101 | `POST /v1/chat/completions` + `GET /healthz` |
+| `mock_tier2` | 9102 | same |
+| `mock_tier3` | 9103 | same |
+
+The `/v1/chat/completions` shape matches `OpenAICompatLLM` (base-url + `/chat/completions`), so the
+same client talks to the mocks and to real OpenAI unchanged. Every response carries a real `usage`
+block. The replies are **deterministic and fully offline** (ideal for the Phase-7 load test):
+
+- **Tier-1 mock doubles as the router backend.** When the request carries the router system prompt
+  (detected by the `ROUTER_MARKER` substring — a guard test keeps it in sync with `ROUTER_SYSTEM`),
+  it returns valid `TierSelection` JSON whose tier is chosen by a keyword heuristic (`order`/`sku`/
+  `price` → 2; `double`/`locked out`/`2fa` → 3; else 1).
+- **Otherwise** it returns a canned `"[mock tier-N] …"` answer (forward-compatible with Phase-4
+  execution).
+
+```bash
+# bring all three up via docker-compose (uses the new Dockerfile)
+docker compose up -d --build mock_tier1 mock_tier2 mock_tier3
+# …or locally, one per shell (no docker needed)
+python -m tiered_rag.mock_llm --tier 1 --port 9101
+python -m tiered_rag.mock_llm --tier 2 --port 9102
+python -m tiered_rag.mock_llm --tier 3 --port 9103
+```
+
+`LLM_TYPE=mock` now routes through these servers (`build_llm(settings, tier)` selects the port);
+`LLM_TYPE=openai` still points the same client at the real model behind all three tiers.
+
+### `complete()` now surfaces token usage
+
+The `LLMClient` contract changed from returning `str` to returning
+`LLMResponse{content, usage: TokenUsage}` — token usage is the whole point of this phase, so the
+client surfaces it instead of hiding it. Usage comes from the response's `usage` block (both real
+OpenAI and our mock return one) and falls back to a deterministic `~4-chars/token` estimate only if
+absent, so the number is **always present**. `Router.route()`'s public contract is unchanged; a new
+`Router.route_detailed()` returns `RouteResult{selection, usage}` to expose usage to the gateway.
+
+### Per-request structured token/cost log + `/usage`
+
+`tiered_rag.observability` records, per request, a structured JSON line on the `tiered_rag.usage`
+logger and accumulates the running spend:
+
+| Field | Source |
+|---|---|
+| `tier` | router decision (1/2/3) |
+| `model` | `OPENAI_MODEL` (or `mock`) |
+| `prompt_tokens` / `completion_tokens` / `total_tokens` | response `usage` (or estimate) |
+| `cost_usd` | `estimate_cost(tier, usage, settings)` |
+| `latency_ms` | `perf_counter` around the routing call |
+
+**Cost is simulated, not billed:** per-1K input/output base rates × a per-tier multiplier
+(tier-1 = 1×, tier-2 = 3×, tier-3 = 10× by default, all from `Settings`). The point is the
+*relative* cost so Phase 7 can compute routing savings — cheap router, pricey deep reasoning.
+
+`/chat` now returns a `usage` block and `GET /usage` reports the running totals:
+
+```bash
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+     -d '{"query":"what is the status of order #12345?"}'
+# -> {"tier":2,"reason":"mock tier-2 (deterministic)","plan":null,
+#     "answer":"[stub] would execute the Tier-2 pipeline (Phase 4/6)",
+#     "usage":{"prompt_tokens":151,"completion_tokens":16,"total_tokens":167,"cost_usd":9.675e-05}}
+
+curl -s localhost:8000/usage
+# -> {"requests":2,"total_cost_usd":0.00012795}
+```
+
+Execution stays **stubbed** in Phase 3 — `/chat` still returns the Phase-2 stub answer; Phase 3 only
+adds the `usage` block and logging around the routing call. Real Tier-1/2 execution lands in Phase 4.
+
+### Tests
+
+```bash
+pytest -m "not integration"                       # all offline (FakeLLM + mock app via TestClient, no sockets)
+pytest -m integration tests/test_integration_mock_llm.py -s   # routes the labeled set through the live mocks
+```
+
+The offline suite exercises the mock app via `fastapi.testclient.TestClient` (no sockets). The
+integration test probes `:9101/healthz`, **skips** if the mocks aren't up, otherwise routes the
+whole labeled 6-category set through `LLM_TYPE=mock` and asserts the deterministic heuristic clears
+a modest bar plus end-to-end token usage.
+
+> **Result (2026-05-29):** against the live mock servers, the deterministic keyword router scored
+> **0.88** routing accuracy on the labeled set (it's deterministic, not smart — the real-model path
+> hit 1.00 in Phase 2).
