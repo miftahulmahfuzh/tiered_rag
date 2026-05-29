@@ -44,3 +44,10 @@ def test_route_detailed_exposes_usage():
     assert isinstance(res, RouteResult)
     assert res.selection.tier == 1
     assert res.usage.total_tokens > 0
+
+
+def test_tier1_plan_is_an_intent_label():
+    canned = json.dumps({"tier": 1, "reason": "greeting", "plan": "greeting"})
+    sel = Router(FakeLLM(canned)).route("hi there!")
+    assert sel.tier == 1
+    assert sel.plan in {"greeting", "faq", "classification"}

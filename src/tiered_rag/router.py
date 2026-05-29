@@ -29,8 +29,11 @@ Tiers:
   item details, or account tier.
 - 3 = complex multi-step troubleshooting, or a sensitive/escalation complaint.
 
+For tier 1, set "plan" to the intent: "greeting", "faq", or "classification".
+For tier 2 and tier 3, set "plan" to null (the tier's own model builds the plan later).
+
 Reply with JSON only (no prose, no markdown fence):
-{"tier": <1|2|3>, "reason": "<short reason>", "plan": null}
+{"tier": <1|2|3>, "reason": "<short reason>", "plan": <"greeting"|"faq"|"classification"|null>}
 """
 
 
