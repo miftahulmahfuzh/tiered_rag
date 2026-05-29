@@ -4,6 +4,18 @@
 > implement this plan task-by-task. Use superpowers-extended-cc:test-driven-development
 > for every task (RED → GREEN → COMMIT).
 
+> ## ✅ STATUS: COMPLETE (2026-05-29)
+>
+> All 6 tasks (0–5) implemented TDD-style and committed to `main`. **40 offline tests pass**
+> (fully offline: `FakeLLM` + mock app via `TestClient`, no sockets) + **3 integration tests**
+> (Phase-1 RAG end-to-end, Phase-2 real-OpenAI routing, Phase-3 mock routing). The three mock
+> tier servers run on **9101/9102/9103**; the Docker image **builds** and all three come up via
+> `docker compose up mock_tier1 mock_tier2 mock_tier3` (each `/healthz` returns its tier). Against
+> the live mocks, the deterministic keyword router scored **0.88** routing accuracy on the labeled
+> 6-category set (deterministic, not smart — the real-model path was 1.00 in Phase 2). See
+> **[As-Built Deltas](#as-built-deltas-what-differs-from-the-plan-above)** at the end before
+> reusing any snippet verbatim.
+
 **Goal:** Make the `LLM_TYPE=mock` path **real** — stand up the brief-required **3 mock tier
 servers on separate ports** (9101 / 9102 / 9103), each speaking the OpenAI-compatible
 `/chat/completions` shape — and start **counting tokens from day one**: every LLM call surfaces
@@ -872,16 +884,16 @@ git commit -m "feat(p3): Dockerfile + compose mock tier servers + integration te
 
 ## Phase 3 Definition of Done
 
-- [ ] `pytest -m "not integration"` → all green, fully offline (FakeLLM + mock app via TestClient).
-- [ ] Three mock tier servers run on **9101/9102/9103**, each serving OpenAI-compatible
+- [x] `pytest -m "not integration"` → all green, fully offline (FakeLLM + mock app via TestClient). **40 passed.**
+- [x] Three mock tier servers run on **9101/9102/9103**, each serving OpenAI-compatible
       `POST /v1/chat/completions` + `GET /healthz`, deterministic, returning a `usage` block.
-- [ ] `LLM_TYPE=mock` routes a query end-to-end through the tier-1 mock (router heuristic).
-- [ ] `complete()` surfaces `TokenUsage`; the gateway logs a structured per-request
+- [x] `LLM_TYPE=mock` routes a query end-to-end through the tier-1 mock (router heuristic). **0.88 accuracy.**
+- [x] `complete()` surfaces `TokenUsage`; the gateway logs a structured per-request
       token/cost/latency record and `GET /usage` reports running totals.
-- [ ] `docker compose up --build mock_tier1 mock_tier2 mock_tier3` brings the servers up from the
-      new `Dockerfile`.
-- [ ] `pytest -m integration` → mock routing runs against the live servers (skips if down).
-- [ ] README Phase-3 section written. All work committed.
+- [x] `docker compose up --build mock_tier1 mock_tier2 mock_tier3` brings the servers up from the
+      new `Dockerfile`. **Verified: image built, 3 containers healthy.**
+- [x] `pytest -m integration` → mock routing runs against the live servers (skips if down). **3 passed.**
+- [x] README Phase-3 section written. All work committed.
 
 **Next:** write `FOURTH_PHASE_PLAN.md` (Tier 1 & Tier 2 Execution) once Phase 3 is green — it
 wires RAG retrieval into Tier-1 answers (greeting / FAQ / classification) and builds the Tier-2
@@ -890,4 +902,69 @@ pipeline plan → **function calling** (`check_order_status`, `check_item_price`
 `xlsx/item_details.xlsx`) → `final_input_context` → synthesis, swapping the `/chat` stub for real
 answers. The per-tier mock backends and token logging from this phase make that execution both
 testable offline and measurable.
+
+---
+
+## As-Built Deltas (what differs from the plan above)
+
+The plan was followed task-by-task (RED → GREEN → COMMIT), and the code snippets above match what
+shipped **verbatim** — this phase had no design surprises. Notes/discoveries:
+
+1. **Mock-router accuracy is 0.88, not 1.00.** The `_classify` keyword heuristic in `mock_llm.py`
+   is deterministic, not smart: it clears the `ACCURACY_BAR = 0.60` integration bar but misses a
+   couple of the 16 labeled queries (e.g. greetings/FAQs whose wording brushes a tier-2/3 keyword).
+   That is **expected and fine** — the mock exists for offline determinism + load testing (Phase 7),
+   not routing quality. The real-model routing number for the Phase-8 `EVAL_REPORT.md` remains the
+   Phase-2 result of **1.00** with `gpt-5.4-nano`.
+
+2. **Docker path verified, not just written.** `docker compose build mock_tier1` succeeded and
+   `docker compose up -d mock_tier1 mock_tier2 mock_tier3` brought all three up; each `/healthz`
+   returned `{"status":"ok","tier":N}`. Torn down with `docker compose down`. (The plan offered
+   "compose **or** local"; both were exercised — local background processes for the integration
+   test, Docker for the DoD checkbox.)
+
+3. **`docs(p2,p3)` commit carried the plan files.** `THIRD_PHASE_PLAN.md` + the Phase-2 completion
+   summary were committed together in `782b452` *before* the six `feat(p3)` commits — so the six
+   feature commits stay narrowly scoped to code/tests/infra only.
+
+Commit map:
+
+| Task | Commit | Subject |
+|---|---|---|
+| 0 | `19e410c` | per-tier mock URLs + simulated token-cost config |
+| 1 | `5ff78f5` | surface token usage from LLM client (complete → LLMResponse) |
+| 2 | `4be8649` | deterministic per-tier mock LLM server + tiered build_llm |
+| 3 | `864a685` | token/cost observability (UsageRecord + UsageLog + estimate_cost) |
+| 4 | `f18875c` | log per-request token usage on /chat + /usage summary endpoint |
+| 5 | `79ad575` | Dockerfile + compose mock tier servers + integration test + README |
+
+### Resulting codebase state (end of Phase 3)
+
 ```
+src/tiered_rag/
+├── config.py          # + mock_tier2/3_base_url, cost_*_per_1k, tier2/3_cost_multiplier
+├── router.py          # + RouteResult, Router.route_detailed() (route() now a thin wrapper)
+├── api.py             # /chat returns a usage block; new GET /usage; per-app UsageLog on app.state
+├── mock_llm.py        # create_mock_app(tier) factory + main() (--tier/--port); ROUTER_MARKER
+├── observability.py   # estimate_cost(), UsageRecord, UsageLog (in-mem + JSON log line)
+├── llm/
+│   ├── client.py      # complete() → LLMResponse; build_llm(settings, tier=1) picks the port
+│   └── usage.py       # estimate_tokens(), TokenUsage, LLMResponse
+└── (Phase-1/2 modules unchanged: embeddings, vector_store, ingest, retrieval, eval_*, knowledge_base)
+
+tests/
+├── test_llm_usage.py · test_mock_llm.py · test_observability.py   # new this phase
+├── test_config.py · test_llm_client.py · test_router.py · test_api.py   # extended
+└── test_integration_mock_llm.py   # @integration, routes labeled set through live mocks (skips if down)
+
+Dockerfile             # one image runs any tier; CMD defaults to tier-1:9101
+docker-compose.yml     # + mock_tier1/2/3 services (build: ., per-tier command + port)
+```
+
+- **Suite:** 40 offline tests + 3 integration tests, 0 warnings.
+- **Run the mocks:** `docker compose up -d mock_tier1 mock_tier2 mock_tier3` (or `python -m
+  tiered_rag.mock_llm --tier N --port 91xN` locally, one per shell).
+- **Carried into later phases:** execution is still **stubbed** (`/chat` returns the Phase-2 stub
+  answer + a real `usage` block). **Phase 4** swaps the stub for real Tier-1/2 execution; the
+  `build_llm(settings, tier)` selector and `UsageLog` are ready for the Tier-2/3 LLM calls and the
+  Phase-7 cost-savings analysis.
