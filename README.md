@@ -1,7 +1,122 @@
 # tiered_rag
 
-A multi-tier support chatbot backend made using Python, built incrementally in
-**8 phases** (see [`MAJOR_PHASES.md`](MAJOR_PHASES.md)). This README grows phase by phase.
+A **zero-hallucination, multi-tier support chatbot backend**, built incrementally in **8 phases**
+(see [`MAJOR_PHASES.md`](MAJOR_PHASES.md)). A cheap Tier-1 LLM routes every query to Tier 1/2/3,
+the chosen tier executes a plan grounded in real RAG, a verifier guards against hallucination, and
+a semantic cache + failover pool keep it cheap and resilient at scale. The graded evaluation lives
+in [`EVAL_REPORT.md`](EVAL_REPORT.md). This README grows phase by phase; the overview below is the
+top-level map, the per-phase sections that follow are the detailed record.
+
+## Architecture at a glance
+
+```
+            Telegram user                         curl / HTTP client
+                 │ message                               │ POST /chat {query}
+                 ▼                                        ▼
+   POST /telegram/webhook ──(secret check)──►  process_query(query)   ◄── single source of truth
+                 │  background reply                      │
+                 │                                        ▼
+                 │                 ┌──────────── SEMANTIC CACHE (Phase 7) ───────────┐
+                 │                 │ embed → cosine ≥ threshold → HIT: serve @0 tokens │
+                 │                 └───────────────────────┬───────────────────────────┘
+                 │                                         │ MISS
+                 │                                         ▼
+                 │                          Orchestrator.run(query)
+                 │           ┌──────────────────────────────────────────────────────┐
+                 │           │  Tier-1 router LLM → tier ∈ {1,2,3}      (Phase 2)      │
+                 │           │   ├─ T1: greeting / FAQ(+RAG) / classify  (Phase 4)     │
+                 │           │   ├─ T2: LLM-planned tool pipeline        (Phase 4)     │
+                 │           │   └─ T3: multi-step reasoning chain       (Phase 6)     │
+                 │           │  build_llm → FailoverLLM worker pool      (Phase 7)     │
+                 │           │  RAG: ollama nomic-embed + Qdrant, abstain (Phase 1)    │
+                 │           └───────────────────────┬──────────────────────────────┘
+                 │                                   ▼
+                 │                 GUARDRAIL: verifier + knowledge-gap alert (Phase 5)
+                 │                  abstain → "I don't know" ; unsupported → "Pending Review"
+                 ▼                                   ▼
+            send reply                  ChatResponse{answer, tier, usage, verified, cached}
+                                        usage_log → /usage, /stats (cost-savings)  (Phase 3→7)
+```
+
+## Quick Start
+
+```bash
+# 1. dependencies + the whole stack (Qdrant + Redis + mock LLM workers + gateway on :8000)
+pip install -r requirements.txt
+cp .env.example .env                       # then fill in secrets (see below) — .env is gitignored
+docker compose up -d --build
+
+# 2. embeddings model + knowledge base
+ollama pull nomic-embed-text:v1.5          # ollama must be running (`ollama serve`)
+python -m tiered_rag.ingest                # load xlsx/knowledge_base.xlsx into Qdrant
+
+# 3. talk to it
+curl -s localhost:8000/healthz                                            # {"status":"ok"}
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+     -d '{"query":"how do I reset my password?"}'
+```
+
+`LLM_TYPE=mock` (the compose default) makes every answer deterministic and fully offline;
+set `LLM_TYPE=openai` + `OPENAI_API_KEY` in `.env` to put a real model behind all three tiers.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/healthz` | liveness — `{"status":"ok"}`, no LLM call |
+| `POST` | `/chat` | main entry: `{query}` → `{tier, reason, plan, answer, usage, verified, pending_review, cached}` |
+| `GET` | `/usage` | running request count + total simulated cost + cache hit-rate |
+| `GET` | `/stats` | per-tier breakdown + **cost-savings vs all-Tier-3** + cache stats |
+| `POST` | `/telegram/webhook` | Telegram transport — validates the shared secret, reuses `process_query` (Phase 8) |
+
+## Telegram front-end (Phase 8)
+
+The Telegram bot is a thin **transport** over the same `/chat` pipeline — no new answer logic. A
+message hits `POST /telegram/webhook`, which validates the shared secret, runs `process_query`
+(router → tier → guardrail → cache) in a background task, and replies via the Bot API. The
+`TelegramClient` speaks the Bot API over raw `httpx` (no SDK), mirroring `OpenAICompatLLM`.
+
+**Security — the bot token lives only in the gitignored `.env`** (`config.py` default is empty,
+`.env.example` holds placeholders). Never commit the real token.
+
+```bash
+# .env (gitignored)
+TELEGRAM_BOT_TOKEN=<token-from-BotFather>
+TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 16)
+```
+
+**Webhook setup (with ngrok):**
+
+```bash
+docker compose up -d --build && python -m tiered_rag.ingest    # gateway on :8000
+ngrok http 8000                                                # copy the https URL it prints
+python scripts/set_telegram_webhook.py --url https://<id>.ngrok-free.app
+#   registers https://<id>.ngrok-free.app/telegram/webhook with the secret, then confirms via getWebhookInfo
+python scripts/set_telegram_webhook.py --delete                # remove the webhook
+```
+
+**Local-dev fallback (no ngrok)** — long-poll instead of a public webhook (delete the webhook first,
+they conflict):
+
+```bash
+python scripts/telegram_poll.py --gateway http://localhost:8000
+```
+
+Both transports feed the **same** `process_query`, so they produce identical answers.
+
+## Evaluation
+
+See [`EVAL_REPORT.md`](EVAL_REPORT.md) for the graded results from real runs: **100% abstention** on
+out-of-scope questions, **100% routing accuracy** (real model) / **88%** (deterministic mock),
+**62.6% cost-savings** vs all-Tier-3, a **57.1% cache hit-rate**, and **0 errors at 100 concurrent
+users**.
+
+## Tests
+
+```bash
+pytest -m "not integration"   # fast, fully offline (in-memory Qdrant + FakeEmbedder + FakeLLM + TestClient)
+pytest -m integration         # real ollama/Qdrant/Redis/mock-workers/Telegram; each skips if its service is down
+```
 
 ---
 
@@ -705,3 +820,47 @@ concurrent-burst smoke test (each skips if its service is down).
 > **Result (2026-05-29):** full offline suite green (**112 tests**); against the live stack all **9
 > `@integration` tests pass** — the Redis cache round-trips, `FailoverLLM` skips a down worker and the live
 > Tier-1 mock answers, and a 50-request / 20-concurrency burst returns **zero errors**.
+
+---
+
+## Phase 8 — Telegram Front-End + Final Packaging
+
+Phase 8 ships it: a **Telegram bot front-end** over the already-complete `/chat` pipeline, the
+finalized `docker compose` stack, and the two submission documents. The bot is a **new transport,
+not new logic** — the `/chat` body was extracted into a module-level `process_query(...)` (single
+source of truth) and both `POST /chat` and `POST /telegram/webhook` call it, so answers are
+byte-for-byte identical regardless of transport.
+
+```
+Telegram → POST /telegram/webhook → validate X-Telegram-Bot-Api-Secret-Token
+        → extract_message(update) → BackgroundTasks: process_query(text) → TelegramClient.send_message
+        → {"ok": true} returned immediately (so Telegram never times out / retries)
+```
+
+- **`TelegramClient`** (`tiered_rag.telegram`) speaks the Bot API over raw `httpx` (no SDK),
+  mirroring `OpenAICompatLLM`: `send_message`, `get_me`, `set_webhook`, `delete_webhook`,
+  `get_webhook_info`. **`extract_message(update)`** is a pure, never-raises parser returning
+  `(chat_id, text)` for a text message or `None` for anything else (edits, callbacks, malformed).
+- **Webhook safety:** the handler validates the shared secret (returns a `200` on mismatch so a
+  forgery isn't retried), ignores non-text/malformed updates without raising, and does the slow
+  work in `BackgroundTasks` after responding.
+- **Token hygiene:** `telegram_bot_token` / `telegram_webhook_secret` default empty in `config.py`;
+  the real token lives only in the gitignored `.env`; `.env.example` holds placeholders. The
+  compose `gateway` receives `TELEGRAM_*` pass-through from the host `.env`.
+- **Setup + scripts:** see the **Telegram front-end** section near the top — `scripts/set_telegram_webhook.py`
+  (register/delete the webhook via ngrok) and `scripts/telegram_poll.py` (no-ngrok long-poll fallback).
+
+### Tests
+
+```bash
+pytest -m "not integration"      # all offline (FakeTelegramClient spy + TestClient; /chat unchanged)
+pytest -m integration tests/test_integration_telegram.py -s   # live getMe (skips without a token)
+```
+
+The webhook (replies to the right chat, ignores non-message updates, rejects a bad secret, reuses
+the cache), the `extract_message` parser, and the `TelegramClient` (against a stubbed `httpx`) are
+all covered offline; one `@integration` test hits the real `getMe`.
+
+> **Result (2026-05-29):** full offline suite green (**120 tests**), with all Phase-7 `/chat` tests
+> still passing after the `process_query` refactor (byte-for-byte unchanged). `EVAL_REPORT.md`
+> assembles the graded numbers from real runs (see [`EVAL_REPORT.md`](EVAL_REPORT.md)).
