@@ -37,7 +37,7 @@ def _reply(tier: int, system: str, user: str) -> str:
         return json.dumps({"steps": [
             {"instruction": "assess the complaint and its sub-issues", "tool": None, "args": {}},
             {"instruction": "recommend concrete next steps", "tool": None, "args": {}}]})
-    return f"[mock tier-{tier}] deterministic answer for: {user[:80]}"
+    return f"[mock tier-{tier}] deterministic answer for: {user[:1000]}"
 
 
 class _Msg(BaseModel):
