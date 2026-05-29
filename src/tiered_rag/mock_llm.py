@@ -32,6 +32,11 @@ def _reply(tier: int, system: str, user: str) -> str:
     from .verifier import VERIFIER_MARKER
     if VERIFIER_MARKER in system:
         return json.dumps({"supported": True, "reason": "mock verifier (deterministic)"})
+    from .orchestrator import TIER3_PLAN_MARKER
+    if TIER3_PLAN_MARKER in system:
+        return json.dumps({"steps": [
+            {"instruction": "assess the complaint and its sub-issues", "tool": None, "args": {}},
+            {"instruction": "recommend concrete next steps", "tool": None, "args": {}}]})
     return f"[mock tier-{tier}] deterministic answer for: {user[:80]}"
 
 

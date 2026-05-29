@@ -39,3 +39,20 @@ def test_pipeline_guardrail_does_not_break_mocks(monkeypatch):
     # so the answer is served (not escalated). The verifier is meaningfully exercised on the
     # LLM_TYPE=openai path and in the offline guardrail tests.
     assert body["pending_review"] is False
+
+
+def test_pipeline_tier3_chain_via_mocks(monkeypatch):
+    s = get_settings()
+    if not _up(s.mock_llm_base_url):
+        pytest.skip("mock tier servers not running")
+    monkeypatch.setenv("LLM_TYPE", "mock")
+    client = TestClient(create_app())
+    body = client.post(
+        "/chat",
+        json={"query": "I was double-charged, the refund failed, and now I'm locked out"},
+    ).json()
+    assert body["tier"] == 3
+    assert body["usage"]["total_tokens"] > 0
+    # reasoning-only chain -> the Tier-1 mock verifier returns supported -> not escalated
+    assert body["pending_review"] is False
+    assert "[mock tier-3]" in body["answer"]

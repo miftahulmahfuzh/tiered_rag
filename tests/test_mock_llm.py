@@ -59,3 +59,18 @@ def test_tier1_mock_returns_supported_verdict_for_verifier_prompt():
         {"role": "user", "content": "SOURCES:\n...\n\nANSWER:\n...\n\nQUESTION:\n..."}]}
     content = client.post("/v1/chat/completions", json=body).json()["choices"][0]["message"]["content"]
     assert json.loads(content)["supported"] is True
+
+
+def test_tier3_plan_marker_present_in_real_prompt():
+    from tiered_rag.orchestrator import TIER3_PLAN_MARKER, TIER3_PLAN_SYSTEM
+    assert TIER3_PLAN_MARKER in TIER3_PLAN_SYSTEM
+
+
+def test_tier3_mock_returns_chain_plan_for_planner_prompt():
+    import json
+
+    from tiered_rag.orchestrator import TIER3_PLAN_SYSTEM
+    resp = _post(TestClient(create_mock_app(3)), TIER3_PLAN_SYSTEM, "double charged + locked out")
+    plan = json.loads(resp.json()["choices"][0]["message"]["content"])
+    assert isinstance(plan["steps"], list) and len(plan["steps"]) >= 1
+    assert "instruction" in plan["steps"][0]

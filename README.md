@@ -467,3 +467,104 @@ fields, and the verifier-aware mock are all covered offline.
 > **Result (2026-05-29):** full offline suite green (FakeLLM + in-memory Qdrant + `TestClient`); the
 > guardrail runs end-to-end through the live mock servers without spuriously escalating
 > (`pending_review=false` on the mock path).
+
+---
+
+## Phase 6 — Tier-3 Multi-Step Reasoning
+
+Phase 6 replaces the Tier-3 **stub** with a real **multi-step reasoning chain**. Per the locked
+architecture (taxonomy #6), Tier 3 handles **super-complex, multi-step troubleshooting and sensitive
+complaints**. The cheap Tier-1 router still decides the tier (Phase 2); when it routes to Tier 3 the
+**Tier-3 LLM generates a chained plan**, a `Tier3Executor` runs the chain **sequentially with context
+threading**, and the accumulated transcript becomes the `final_input_context` for a single **grounded**
+synthesis — which then flows through the **exact same Phase-5 guardrail** with zero new wiring.
+
+```
+Router.route_detailed(query) → TierSelection{tier=3} + usage
+   │
+   ▼  Tier3Executor.execute(query)
+   │   1. PLAN     Tier-3 LLM → {"steps":[{instruction, tool?, args?}, …]}   (parsed, degrade-to-empty)
+   │   2. EXECUTE  each step (capped at tier3_max_steps), threading the running transcript:
+   │                 tool != null & known → run_tool(tool, args, catalog)        → record + append
+   │                 tool == "retrieve"   → Retriever.retrieve(args.query|query) → record + append
+   │                 tool == null         → LLM reasoning over PRIOR STEPS + instruction → append
+   │   3. ASSEMBLE final_input_context = the full "[step k] … -> …" transcript
+   │   4. SYNTH    synthesize(FAQ_SYSTEM, transcript, query)   (grounded in the chain's evidence)
+   ▼  ExecutionResult{tier=3, answer, final_input_context, tool_calls, usage}
+   ▼  ┌──── GUARDRAIL (Phase 5, UNCHANGED) ────┐
+      │ non-empty context + verifier wired?    │  supported → keep ; NOT supported → escalate
+      └────────────────────────────────────────┘
+```
+
+### Three step kinds
+
+A chain **step** is one of three kinds — the first two inject **real evidence** so the chain isn't just
+LLM free-text, which is what makes a Tier-3 answer genuinely groundable:
+
+| Step kind | Trigger | Behaviour | LLM tokens |
+|---|---|---|---|
+| **tool** | `tool` set to a known tool | dispatched through the Phase-4 `TOOLS` registry (`check_order_status`, `check_item_price`, `check_account_tier`, `get_item_details_from_xlsx`); unknown tool / bad args → `{"error": …}`, chain never crashes | 0 |
+| **retrieve** | `tool == "retrieve"` | grounds the chain in the real KB via the Phase-1 `Retriever` (`{answer, abstain, score}`) | 0 |
+| **reasoning** | `tool is None` | an LLM call (`TIER3_STEP_SYSTEM`) over `PRIOR STEPS:\n{transcript}\n\nNOW DO: {instruction}` — step N's output is in step N+1's prompt | folded in |
+
+### Context threading + bounded chains
+
+Each step appends a `"[step k] … -> …"` line to a running transcript; the **next step's prompt includes
+that transcript**, so the output of step N threads forward into step N+1. The chain is **bounded** by
+`tier3_max_steps` (default 5, from `Settings` — never hardcoded): a plan longer than the cap is silently
+truncated to the first N steps (observable as fewer `[step k]` lines / `tool_calls`).
+
+### Cost is honest
+
+Deterministic **tool** and **retrieve** steps cost **0 LLM tokens**; only **reasoning** steps and the
+final **synthesis** consume tokens. `ExecutionResult.usage` folds **plan + every reasoning step + synth**
+(and then the router call + the Phase-5 verifier call in the orchestrator), so the per-request cost that
+feeds the Phase-7 cost math reflects the *true* cost of the chain **plus** the guardrail.
+
+### The guardrail applies to Tier 3 for free
+
+There is **zero new guardrail wiring**. `Orchestrator._guardrail` already verifies any result whose
+`final_input_context` is non-empty. Because `Tier3Executor` populates `final_input_context` with the
+transcript, the Phase-5 **verifier + knowledge-gap escalation apply to Tier 3 automatically** — an
+unsupported chain answer is escalated to **"Pending Human Specialist Review"** exactly like Tier 1/2.
+The orchestrator change is a one-line swap of the stub for `Tier3Executor(...).execute(query)`.
+
+### Deterministic Tier-3 mock
+
+The Tier-1 mock already returns routing JSON (`ROUTER_MARKER`) and a supported verdict
+(`VERIFIER_MARKER`). It now also recognises `TIER3_PLAN_MARKER` (a stable substring of
+`TIER3_PLAN_SYSTEM`, pinned by a guard test) and returns a deterministic **reasoning-only 2-step chain
+plan**, so the live Tier-3 mock drives a real chain whose step/synth calls fall through to the canned
+`"[mock tier-3] …"` answer. Combined with the verifier-aware mock, the live-mock pipeline runs a real
+Tier-3 chain end-to-end and never spuriously escalates.
+
+```bash
+uvicorn tiered_rag.api:app --reload     # LLM_TYPE=mock, mock tier servers up
+
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+     -d '{"query":"I was double-charged, the refund failed, and now I'\''m locked out"}'
+# -> {"tier":3,"reason":"mock tier-3 (deterministic)","plan":null,
+#     "answer":"[mock tier-3] deterministic answer for: CONTEXT:\n[step 1] assess the complaint ...",
+#     "usage":{"prompt_tokens":948,"completion_tokens":153,"total_tokens":1101,"cost_usd":0.00234},
+#     "verified":true,"pending_review":false}
+```
+
+The multi-step query routes to Tier 3, the chain runs (plan → 2 reasoning steps with context threading →
+grounded synthesis), the verifier confirms the answer is supported, and the aggregated usage covers the
+whole request (router + plan + steps + synth + verifier).
+
+### Tests
+
+```bash
+pytest -m "not integration"      # all offline (FakeLLM + in-memory Qdrant + TestClient)
+# bring the Phase-3 mocks up, then:
+pytest -m integration            # pipeline (incl. live-mock Tier-3 chain) + Phase-1/2/3; skips what's down
+```
+
+Everything new is offline-testable: chain threading, the tool/retrieve/reasoning step kinds, the
+`tier3_max_steps` cap, and degrade-to-empty / never-crash on bad plans/tools are all covered with crafted
+plans injected via `FakeLLM`. One `@integration` test routes a multi-step query through the live mock
+tier servers (skips if down).
+
+> **Result (2026-05-29):** full offline suite green (91 tests); the live-mock pipeline runs a real
+> Tier-3 chain end-to-end (`tier=3`, aggregated `total_tokens > 0`, `pending_review=false`).
