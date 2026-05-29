@@ -7,3 +7,4 @@ qdrant_storage/
 *.egg-info/
 build/
 dist/
+code_understanding/

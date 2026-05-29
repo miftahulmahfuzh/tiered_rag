@@ -20,6 +20,13 @@ services:
     image: redis:7
     ports: ["6379:6379"]
 
+  # knowledge-gap operator dashboard — catches the gateway's async gap webhook
+  # and renders it in a browser at http://localhost:9000 (stateless, in-memory).
+  alertboard:
+    build: .
+    command: uvicorn tiered_rag.alertboard:app --host 0.0.0.0 --port 9000
+    ports: ["9000:9000"]
+
   # real-OpenAI, cache-backed gateway — one model behind routing + all three tiers
   gateway:
     build: .
@@ -34,6 +41,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       OLLAMA_HOST: http://host.docker.internal:11434
+      # async knowledge-gap alerts POST here — the alertboard dashboard catches them
+      ALERT_WEBHOOK_URL: http://alertboard:9000/alert
       # Phase 8: Telegram front-end — pass through from the host .env (kept out of this file)
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
@@ -42,4 +51,4 @@ services:
     # "No address associated with hostname"; the retry in OpenAICompatLLM is the
     # second line of defence.
     dns: ["8.8.8.8", "1.1.1.1"]
-    depends_on: [redis, qdrant]
+    depends_on: [redis, qdrant, alertboard]
