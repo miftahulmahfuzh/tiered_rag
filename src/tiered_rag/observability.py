@@ -26,6 +26,7 @@ class UsageRecord:
     total_tokens: int
     cost_usd: float
     latency_ms: float
+    cached: bool = False
 
 
 class UsageLog:
@@ -35,7 +36,7 @@ class UsageLog:
         self.records: list[UsageRecord] = []
 
     def record(self, *, tier: int, model: str, usage: TokenUsage,
-               latency_ms: float, settings: Settings) -> UsageRecord:
+               latency_ms: float, settings: Settings, cached: bool = False) -> UsageRecord:
         rec = UsageRecord(
             tier=tier,
             model=model,
@@ -44,6 +45,7 @@ class UsageLog:
             total_tokens=usage.total_tokens,
             cost_usd=estimate_cost(tier, usage, settings),
             latency_ms=round(latency_ms, 2),
+            cached=cached,
         )
         self.records.append(rec)
         logger.info("usage %s", json.dumps(asdict(rec)))

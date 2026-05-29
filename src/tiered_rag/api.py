@@ -5,10 +5,12 @@ from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
 from .alerting import Alerter
+from .cache import RedisCacheBackend, SemanticCache, cacheable
 from .config import Settings, get_settings
 from .embeddings import OllamaEmbedder
 from .knowledge_base import catalog_index, load_item_details
 from .llm.client import build_llm
+from .llm.usage import TokenUsage
 from .observability import UsageLog
 from .orchestrator import Orchestrator
 from .retrieval import Retriever
@@ -36,6 +38,7 @@ class ChatResponse(BaseModel):
     usage: Usage
     verified: bool | None = None
     pending_review: bool = False
+    cached: bool = False
 
 
 def get_settings_dep() -> Settings:
@@ -62,6 +65,29 @@ def get_alerter(request: Request) -> Alerter:
     return request.app.state.alerter
 
 
+def get_cache(request: Request) -> SemanticCache | None:
+    """Build the real (Redis-backed) semantic cache lazily; tests override this dependency.
+
+    Returns None when caching is disabled. The Redis client is created lazily and connects
+    only on the first command, so building the cache offline never opens a socket.
+    """
+    s = get_settings()
+    if not s.cache_enabled:
+        return None
+    cache = getattr(request.app.state, "cache", None)
+    if cache is None:
+        import redis  # local import: redis is only needed on the real path
+
+        backend = RedisCacheBackend(
+            redis.Redis.from_url(s.redis_url, decode_responses=True),
+            prefix=s.cache_key_prefix, ttl=s.cache_ttl_seconds, max_entries=s.cache_max_entries,
+        )
+        cache = SemanticCache(OllamaEmbedder(s.ollama_host, s.embed_model), backend,
+                              s.cache_similarity_threshold)
+        request.app.state.cache = cache
+    return cache
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="tiered_rag gateway")
     app.state.usage_log = UsageLog()
@@ -79,7 +105,23 @@ def create_app() -> FastAPI:
         usage_log: UsageLog = Depends(get_usage_log),
         alerter: Alerter = Depends(get_alerter),
         settings: Settings = Depends(get_settings_dep),
+        cache: SemanticCache | None = Depends(get_cache),
     ):
+        # --- semantic cache lookup: a near-duplicate of a past query is served at 0 tokens ---
+        if cache is not None:
+            hit = cache.get(req.query)
+            if hit is not None:
+                usage_log.record(
+                    tier=hit["tier"], model=settings.openai_model,
+                    usage=TokenUsage(0, 0), latency_ms=0.0, settings=settings, cached=True,
+                )
+                return ChatResponse(
+                    tier=hit["tier"], reason=hit.get("reason", ""), plan=hit.get("plan"),
+                    answer=hit["answer"], verified=hit.get("verified"), pending_review=False,
+                    usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=0.0),
+                    cached=True,
+                )
+
         t0 = time.perf_counter()
         res = orchestrator.run(req.query)
         latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -89,6 +131,10 @@ def create_app() -> FastAPI:
         )
         if res.gap is not None:
             background_tasks.add_task(alerter.alert, res.gap)   # async knowledge-gap alert
+        # --- only *served* answers are cached (never abstain/escalation) ---
+        if cache is not None and cacheable(res):
+            cache.put(req.query, {"answer": res.answer, "tier": res.tier, "reason": res.reason,
+                                  "plan": res.plan, "verified": res.verified})
         return ChatResponse(
             tier=res.tier, reason=res.reason, plan=res.plan, answer=res.answer,
             verified=res.verified,
@@ -97,6 +143,7 @@ def create_app() -> FastAPI:
                 prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                 total_tokens=rec.total_tokens, cost_usd=rec.cost_usd,
             ),
+            cached=False,
         )
 
     @app.get("/usage")

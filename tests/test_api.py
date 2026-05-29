@@ -1,14 +1,16 @@
 from fastapi.testclient import TestClient
 
 from tests._helpers import build_orchestrator
-from tiered_rag.api import create_app, get_alerter, get_orchestrator
+from tiered_rag.api import create_app, get_cache, get_orchestrator
 from tiered_rag.llm.client import FakeLLM
 from tiered_rag.verifier import Verifier
 
 
 def _client_with_orchestrator(orch):
+    # these tests predate the cache and exercise the non-cached path -> disable the cache
     app = create_app()
     app.dependency_overrides[get_orchestrator] = lambda: orch
+    app.dependency_overrides[get_cache] = lambda: None
     return TestClient(app)
 
 
@@ -46,26 +48,43 @@ def test_usage_endpoint_counts_requests_and_cost(fake_embedder):
 
 def test_chat_escalates_and_alerts_on_unverified_answer(fake_embedder):
     reject = Verifier(FakeLLM('{"supported": false, "reason": "ungrounded"}'))
-    orch = build_orchestrator(fake_embedder, 1, "faq", verifier=reject)
-    app = create_app()
-    app.dependency_overrides[get_orchestrator] = lambda: orch
-    client = TestClient(app)
+    client = _client_with_orchestrator(build_orchestrator(fake_embedder, 1, "faq", verifier=reject))
     body = client.post("/chat", json={"query": "how do I reset my password"}).json()
     assert body["pending_review"] is True
     assert body["verified"] is False
     assert "Pending Human Specialist Review" in body["answer"]
     # async alert fired (TestClient runs BackgroundTasks on response)
-    assert len(app.state.alerter.alerts) == 1
-    assert app.state.alerter.alerts[0].kind == "unverified"
+    assert len(client.app.state.alerter.alerts) == 1
+    assert client.app.state.alerter.alerts[0].kind == "unverified"
 
 
 def test_chat_supported_answer_has_no_alert(fake_embedder):
     approve = Verifier(FakeLLM('{"supported": true, "reason": "ok"}'))
-    orch = build_orchestrator(fake_embedder, 1, "faq", verifier=approve)
-    app = create_app()
-    app.dependency_overrides[get_orchestrator] = lambda: orch
-    client = TestClient(app)
+    client = _client_with_orchestrator(build_orchestrator(fake_embedder, 1, "faq", verifier=approve))
     body = client.post("/chat", json={"query": "how do I reset my password"}).json()
     assert body["verified"] is True
     assert body["pending_review"] is False
-    assert len(app.state.alerter.alerts) == 0
+    assert len(client.app.state.alerter.alerts) == 0
+
+
+def test_chat_caches_and_serves_a_repeat_query(client_with_inmemory_cache):
+    client, spy = client_with_inmemory_cache         # spy counts orchestrator.run calls
+    first = client.post("/chat", json={"query": "how do I reset my password"}).json()
+    assert first["cached"] is False
+    second = client.post("/chat", json={"query": "how do I reset my password"}).json()
+    assert second["cached"] is True
+    assert second["answer"] == first["answer"]
+    assert second["usage"]["total_tokens"] == 0      # a cache hit costs no tokens
+    assert spy.calls == 1                             # orchestrator ran only for the cold miss
+
+
+def test_chat_does_not_cache_escalations(fake_embedder):
+    # an escalated (pending_review) answer must NOT be cached -> the gap keeps alerting
+    from tests._helpers import build_cached_client
+    reject = Verifier(FakeLLM('{"supported": false, "reason": "ungrounded"}'))
+    client, spy = build_cached_client(fake_embedder, 1, "faq", verifier=reject)
+    first = client.post("/chat", json={"query": "how do I reset my password"}).json()
+    assert first["pending_review"] is True and first["cached"] is False
+    second = client.post("/chat", json={"query": "how do I reset my password"}).json()
+    assert second["cached"] is False                  # escalation not cached -> orchestrator ran again
+    assert spy.calls == 2
