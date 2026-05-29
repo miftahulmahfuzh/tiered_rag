@@ -93,6 +93,36 @@ class Tier2Plan(BaseModel):
     calls: list[ToolCall] = []
 
 
+TIER3_PLAN_MARKER = "Tier-3 planner"
+
+TIER3_PLAN_SYSTEM = (
+    "You are the Tier-3 planner for complex, multi-step support cases.\n"
+    "Decompose the user's request into an ORDERED chain of steps; each step may use a tool, "
+    "retrieve from the knowledge base, or reason over the previous steps' output.\n"
+    "Available tools:\n" + _tool_menu() + "\n"
+    '- retrieve: search the knowledge base; args {"query": "<text>"}.\n\n'
+    'Reply with JSON only (no prose, no markdown fence): '
+    '{"steps": [{"instruction": "<what this step does>", '
+    '"tool": <"<tool name>"|"retrieve"|null>, "args": {<k>: <v>}}, ...]}. '
+    "Use tool=null for a pure reasoning step. Keep the chain short and ordered."
+)
+
+TIER3_STEP_SYSTEM = (
+    "You are executing ONE step of a Tier-3 reasoning chain. Use the PRIOR STEPS as context and "
+    "perform only the current step. Be concise and do not invent facts beyond the prior context."
+)
+
+
+class ChainStep(BaseModel):
+    instruction: str = ""
+    tool: str | None = None
+    args: dict = {}
+
+
+class Tier3Plan(BaseModel):
+    steps: list[ChainStep] = []
+
+
 def _format_context(tool_calls: list[dict]) -> str:
     return "\n".join(f"{c['tool']}({c['args']}) -> {json.dumps(c['result'])}" for c in tool_calls)
 

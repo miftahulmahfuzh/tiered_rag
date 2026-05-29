@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     verify_answers: bool = True            # run the verifier on grounded answers
     alert_webhook_url: str = ""            # empty -> log-only knowledge-gap alerts
 
+    # --- Tier-3 multi-step reasoning (Phase 6) ---
+    tier3_max_steps: int = 5               # bound the chain length (cost/latency guard)
+
 
 def get_settings() -> Settings:
     return Settings()

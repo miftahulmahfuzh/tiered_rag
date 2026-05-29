@@ -48,3 +48,9 @@ def test_phase5_guardrail_defaults():
     s = Settings()
     assert s.alert_webhook_url == ""        # log-only by default
     assert s.verify_answers is True         # guardrail on by default
+
+
+def test_phase6_tier3_max_steps_default():
+    s = Settings()
+    assert s.tier3_max_steps == 5
+    assert s.tier3_max_steps > 0
