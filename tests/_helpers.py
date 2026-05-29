@@ -22,7 +22,7 @@ def build_retriever(fake_embedder):
     return Retriever(store, fake_embedder, threshold=0.6)
 
 
-def build_orchestrator(fake_embedder, route_tier, route_plan=None):
+def build_orchestrator(fake_embedder, route_tier, route_plan=None, verifier=None):
     router = Router(FakeLLM(json.dumps({"tier": route_tier, "reason": "x", "plan": route_plan})))
 
     def llm_for(tier):
@@ -33,4 +33,4 @@ def build_orchestrator(fake_embedder, route_tier, route_plan=None):
                         if "plan" in system.lower() else user)
             return FakeLLM(r)
         return FakeLLM(lambda s, u: u)
-    return Orchestrator(router, build_retriever(fake_embedder), CATALOG, llm_for)
+    return Orchestrator(router, build_retriever(fake_embedder), CATALOG, llm_for, verifier=verifier)

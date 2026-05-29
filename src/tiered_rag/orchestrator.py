@@ -6,14 +6,19 @@ from typing import Callable
 
 from pydantic import BaseModel
 
+from .alerting import GapAlert
 from .llm.client import LLMClient
 from .llm.usage import LLMResponse, TokenUsage
 from .retrieval import Retriever
 from .router import Router, _extract_json
 from .tools.registry import TOOLS, run_tool
+from .verifier import Verifier
 
 I_DONT_KNOW = ("I'm sorry, I don't have enough information to answer that. "
                "Let me know if there's something else I can help with.")
+
+PENDING_REVIEW = ("This needs a human specialist. I've flagged it for review "
+                  "(Pending Human Specialist Review) and someone will follow up shortly.")
 
 GREETING_SYSTEM = "You are a friendly game-store support agent. Greet the user warmly in one line."
 FAQ_SYSTEM = ("You are a support agent. Answer the user's question using ONLY the CONTEXT below. "
@@ -31,6 +36,9 @@ class ExecutionResult:
     usage: TokenUsage = field(default_factory=TokenUsage)
     reason: str = ""
     plan: str | None = None
+    verified: bool | None = None          # None = not applicable/not run
+    abstained: bool = False
+    gap: "GapAlert | None" = None
 
 
 def _synth_user(context: str, query: str) -> str:
@@ -57,7 +65,7 @@ class Tier1Executor:
         # default + "faq": RAG-grounded, abstain-aware
         rr = self.retriever.retrieve(query)
         if rr.abstain:
-            return ExecutionResult(tier=1, answer=I_DONT_KNOW, plan="faq")
+            return ExecutionResult(tier=1, answer=I_DONT_KNOW, plan="faq", abstained=True)
         context = rr.answer or ""
         r = synthesize(self.llm, FAQ_SYSTEM, context, query)
         return ExecutionResult(tier=1, answer=r.content, final_input_context=context,
@@ -125,8 +133,24 @@ class Tier2Executor:
 
 class Orchestrator:
     def __init__(self, router: Router, retriever: Retriever, catalog: dict,
-                 llm_for: Callable[[int], LLMClient]):
-        self.router, self.retriever, self.catalog, self.llm_for = router, retriever, catalog, llm_for
+                 llm_for: Callable[[int], LLMClient], verifier: Verifier | None = None):
+        self.router, self.retriever, self.catalog = router, retriever, catalog
+        self.llm_for, self.verifier = llm_for, verifier
+
+    def _guardrail(self, query: str, res: ExecutionResult) -> ExecutionResult:
+        if res.abstained:
+            res.gap = GapAlert(kind="abstain", query=query, answer=res.answer)
+            return res
+        if res.final_input_context and self.verifier is not None:
+            verdict, vusage = self.verifier.verify(query, res.answer, res.final_input_context)
+            res.usage = TokenUsage(res.usage.prompt_tokens + vusage.prompt_tokens,
+                                   res.usage.completion_tokens + vusage.completion_tokens)
+            res.verified = verdict.supported
+            if not verdict.supported:
+                res.gap = GapAlert(kind="unverified", query=query, answer=res.answer,
+                                   evidence=res.final_input_context, reason=verdict.reason)
+                res.answer = PENDING_REVIEW
+        return res
 
     def run(self, query: str) -> ExecutionResult:
         route = self.router.route_detailed(query)
@@ -138,6 +162,8 @@ class Orchestrator:
                                   answer="[stub] would run the Tier-3 multi-step chain (Phase 6)")
         else:
             res = Tier1Executor(self.retriever, self.llm_for(1)).execute(query, sel.plan)
+
+        res = self._guardrail(query, res)
 
         res.reason = sel.reason
         res.plan = res.plan if res.plan is not None else sel.plan
