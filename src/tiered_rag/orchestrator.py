@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Callable
 
 from pydantic import BaseModel
 
 from .llm.client import LLMClient
 from .llm.usage import LLMResponse, TokenUsage
 from .retrieval import Retriever
-from .router import _extract_json
+from .router import Router, _extract_json
 from .tools.registry import TOOLS, run_tool
 
 I_DONT_KNOW = ("I'm sorry, I don't have enough information to answer that. "
@@ -120,3 +121,28 @@ class Tier2Executor:
         )
         return ExecutionResult(tier=2, answer=synth.content, final_input_context=context,
                                tool_calls=tool_calls, usage=usage)
+
+
+class Orchestrator:
+    def __init__(self, router: Router, retriever: Retriever, catalog: dict,
+                 llm_for: Callable[[int], LLMClient]):
+        self.router, self.retriever, self.catalog, self.llm_for = router, retriever, catalog, llm_for
+
+    def run(self, query: str) -> ExecutionResult:
+        route = self.router.route_detailed(query)
+        sel = route.selection
+        if sel.tier == 2:
+            res = Tier2Executor(self.llm_for(2), self.catalog).execute(query)
+        elif sel.tier == 3:
+            res = ExecutionResult(tier=3,
+                                  answer="[stub] would run the Tier-3 multi-step chain (Phase 6)")
+        else:
+            res = Tier1Executor(self.retriever, self.llm_for(1)).execute(query, sel.plan)
+
+        res.reason = sel.reason
+        res.plan = res.plan if res.plan is not None else sel.plan
+        res.usage = TokenUsage(
+            res.usage.prompt_tokens + route.usage.prompt_tokens,
+            res.usage.completion_tokens + route.usage.completion_tokens,
+        )
+        return res
