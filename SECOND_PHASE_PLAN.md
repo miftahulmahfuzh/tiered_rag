@@ -4,6 +4,14 @@
 > implement this plan task-by-task. Use superpowers-extended-cc:test-driven-development
 > for every task (RED → GREEN → COMMIT).
 
+> ## ✅ STATUS: COMPLETE (2026-05-29)
+>
+> All 7 tasks (0–6) implemented TDD-style and committed to `main`. **26 offline tests pass**
+> + **2 integration tests** (Phase-1 RAG end-to-end + Phase-2 real-OpenAI routing). Real
+> routing accuracy was **1.00** across all 6 categories with `gpt-5.4-nano`. See
+> **[As-Built Deltas](#as-built-deltas-what-differs-from-the-plan-above)** at the end before
+> reusing any snippet verbatim.
+
 **Goal:** The cheap **Tier-1 LLM is the entry point and decides the tier** (1/2/3) for every
 query, emitting a structured `TierSelection {tier, reason, plan?}`. A FastAPI gateway takes a
 query in, routes it, and returns the decision with a **stubbed** execution answer. We measure
@@ -745,16 +753,52 @@ git commit -m "feat(p2): real-OpenAI routing accuracy integration test + README"
 
 ## Phase 2 Definition of Done
 
-- [ ] `pytest -m "not integration"` → all green, fully offline (FakeLLM, no network).
-- [ ] `uvicorn tiered_rag.api:app` serves `GET /healthz` and `POST /chat`; `/chat` returns
-      a routed `{tier, reason, plan, answer-stub}`.
-- [ ] `Router.route()` returns a validated `TierSelection` and **falls back to Tier 1** on
+- [x] `pytest -m "not integration"` → all green, fully offline (FakeLLM, no network). **(26 passed)**
+- [x] `uvicorn tiered_rag.api:app` serves `GET /healthz` and `POST /chat`; `/chat` returns
+      a routed `{tier, reason, plan, answer-stub}`. **(healthz smoke-tested OK)**
+- [x] `Router.route()` returns a validated `TierSelection` and **falls back to Tier 1** on
       malformed model output.
-- [ ] Routing-accuracy eval harness exists with a labeled 6-category dataset; per-category
+- [x] Routing-accuracy eval harness exists with a labeled 6-category dataset; per-category
       accuracy + confusion are reported.
-- [ ] `pytest -m integration` → real OpenAI routing accuracy ≥ 0.80 (skips without a key).
-- [ ] README Phase-2 section written. All work committed.
+- [x] `pytest -m integration` → real OpenAI routing accuracy ≥ 0.80 (skips without a key).
+      **(1.00 with `gpt-5.4-nano`)**
+- [x] README Phase-2 section written. All work committed.
 
 **Next:** write `THIRD_PHASE_PLAN.md` (Mock-vs-Real LLM Backend + Token Logging) once Phase 2
 is green — it stands up the 3 mock tier servers on separate ports (the `LLM_TYPE=mock` path
 this phase only stubbed in config) and adds per-tier token logging.
+
+---
+
+## As-Built Deltas (what differs from the plan above)
+
+The plan was followed task-by-task (RED → GREEN → COMMIT). Deviations/discoveries:
+
+1. **`fastapi`/`uvicorn` added to `pyproject.toml` `[project].dependencies`** (not just
+   `requirements.txt`). The package is pip-installed editable, so the runtime deps belong in
+   the installable metadata too. Installed `fastapi-0.136.3` + `starlette-1.2.0` +
+   `uvicorn-0.48.0` into the `tiered_rag` conda env.
+
+2. **Pristine test output (Task 5).** `starlette` 1.2.0's `TestClient` emits a
+   `StarletteDeprecationWarning` ("Using `httpx` with `starlette.testclient` is deprecated")
+   at import time — a third-party warning, not our code. Added a narrowly-scoped
+   `filterwarnings` entry in `[tool.pytest.ini_options]` matching that message so the suite
+   stays warning-free.
+
+3. **Routing accuracy — a real result.** The integration test was expected to *skip* (no key),
+   but a real `OPENAI_API_KEY` was present in `.env`, so it ran against `gpt-5.4-nano` and
+   scored **accuracy = 1.00** across all six categories (greeting, simple_faq, classification,
+   function_calling, structured_extraction, multi_step). Carry this into the Phase-8
+   `EVAL_REPORT.md` Routing-Intelligence section.
+
+Commit map:
+
+| Task | Subject |
+|---|---|
+| 0 | `feat(p2): LLM backend config (LLM_TYPE/OpenAI/mock + router temperature)` |
+| 1 | `feat(p2): TierSelection structured-output schema` |
+| 2 | `feat(p2): LLMClient protocol + FakeLLM + OpenAICompatLLM + build_llm factory` |
+| 3 | `feat(p2): Router (prompt -> JSON parse -> TierSelection, Tier-1 fallback)` |
+| 4 | `feat(p2): routing-accuracy eval harness + labeled 6-category dataset` |
+| 5 | `feat(p2): FastAPI gateway /chat + /healthz (execution stubbed)` |
+| 6 | `feat(p2): real-OpenAI routing accuracy integration test + README` |
