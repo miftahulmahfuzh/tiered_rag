@@ -60,6 +60,22 @@ def test_savings_vs_all_tier3_is_positive_when_routing_cheaply():
     assert 0.0 < sv["savings_pct"] <= 1.0
 
 
+def test_savings_re_prices_only_answer_generation_at_tier3():
+    # all-Tier-3 baseline keeps the fixed tier-1 overhead (router+verifier) at tier-1;
+    # only the answer-generation work (here 50/25 of the 200/100 total) moves to tier-3.
+    s, log = Settings(), UsageLog()
+    log.record(tier=1, model="m", usage=TokenUsage(200, 100), latency_ms=1, settings=s,
+               usage_by_tier={1: TokenUsage(200, 100)}, answer_usage=TokenUsage(50, 25))
+    sv = log.savings_vs_all_tier3(s)
+    expected_actual = estimate_cost(1, TokenUsage(200, 100), s)
+    expected_hypo = estimate_cost(1, TokenUsage(150, 75), s) + estimate_cost(3, TokenUsage(50, 25), s)
+    assert abs(sv["actual_cost_usd"] - expected_actual) < 1e-12
+    assert abs(sv["all_tier3_cost_usd"] - expected_hypo) < 1e-12
+    # strictly cheaper than naively charging the WHOLE request at tier-3 (the old, wrong baseline)
+    assert sv["all_tier3_cost_usd"] < estimate_cost(3, TokenUsage(200, 100), s)
+    assert 0.0 < sv["savings_pct"] < 1.0
+
+
 def test_by_tier_groups_records():
     from tiered_rag.config import Settings
     from tiered_rag.llm.usage import TokenUsage

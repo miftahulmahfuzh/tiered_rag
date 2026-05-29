@@ -85,11 +85,22 @@ is what demonstrates Routing Intelligence (1.00 above).
 ## 3. Token & cost observability — savings vs all-Tier-3 (Phase 7)
 
 Cost is **simulated, not billed**: per-1K input/output base rates × a per-tier multiplier
-(Tier-1 = 1×, Tier-2 = 3×, Tier-3 = 10×). `savings_vs_all_tier3` re-costs every recorded request's
-*real* token counts at the Tier-3 multiplier and compares to the actual cost — the graded
-"Tier-1/2 routing vs all-Tier-3" number.
+(Tier-1 = 1×, Tier-2 = 3×, Tier-3 = 10×). Cost is attributed **per stage**: the router and
+verifier run on the Tier-1 model and are billed at Tier-1 even on a Tier-2/3 request; only the
+planner + synthesizer are billed at the route tier.
 
-From a real `--n 300 --concurrency 100` run against the mock-backed gateway (2026-05-29):
+`savings_vs_all_tier3` therefore re-prices **only the answer-generation work** at Tier 3 — the
+fixed Tier-1 overhead (the router that classifies every message + the Tier-1 verifier) is
+unavoidable and stays at Tier 1 in both worlds, so it cancels out. This is stricter (and lower)
+than the earlier baseline, which re-priced the *whole* request — including router + verifier — at
+Tier 3 and thus over-stated savings.
+
+> The headline figures below were measured under the **earlier (whole-request) baseline** and
+> should be **re-measured** under per-stage attribution; expect a somewhat lower savings_pct.
+> Re-run: `python scripts/load_test.py --n 300 --concurrency 100 && curl -s localhost:8000/stats`.
+
+From a real `--n 300 --concurrency 100` run against the mock-backed gateway (2026-05-29,
+pre-per-stage baseline):
 
 ```
 savings: actual=$0.030698  all_tier3=$0.082023  savings_pct=62.6%

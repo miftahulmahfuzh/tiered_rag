@@ -29,6 +29,20 @@ def test_llm_type_override(monkeypatch):
     assert Settings().llm_type == "mock"
 
 
+def test_model_for_tier_falls_back_to_openai_model():
+    s = Settings(openai_model="base")
+    assert s.model_for_tier(1) == "base"
+    assert s.model_for_tier(2) == "base"
+    assert s.model_for_tier(3) == "base"
+
+
+def test_model_for_tier_uses_per_tier_override():
+    s = Settings(openai_model="base", openai_tier2_model="pro", openai_tier3_model="frontier")
+    assert s.model_for_tier(1) == "base"        # unset -> falls back
+    assert s.model_for_tier(2) == "pro"
+    assert s.model_for_tier(3) == "frontier"
+
+
 def test_phase3_mock_and_cost_defaults():
     s = Settings()
     # tier-1 mock is the existing mock_llm_base_url (:9101)

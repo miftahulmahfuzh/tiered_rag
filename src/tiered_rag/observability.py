@@ -34,6 +34,9 @@ class UsageRecord:
     cost_usd: float
     latency_ms: float
     cached: bool = False
+    # answer-generation tokens (executor at the route tier); the rest is fixed tier-1
+    # overhead (router + verifier). Used by the all-Tier-3 savings baseline. None = unknown.
+    answer_usage: "TokenUsage | None" = None
 
 
 class UsageLog:
@@ -44,7 +47,8 @@ class UsageLog:
 
     def record(self, *, tier: int, model: str, usage: TokenUsage,
                latency_ms: float, settings: Settings, cached: bool = False,
-               usage_by_tier: dict[int, TokenUsage] | None = None) -> UsageRecord:
+               usage_by_tier: dict[int, TokenUsage] | None = None,
+               answer_usage: TokenUsage | None = None) -> UsageRecord:
         # When a per-stage breakdown is supplied, bill each stage at its own tier's
         # multiplier; otherwise fall back to charging the whole usage at `tier`.
         cost = (estimate_cost_breakdown(usage_by_tier, settings) if usage_by_tier
@@ -58,6 +62,7 @@ class UsageLog:
             cost_usd=cost,
             latency_ms=round(latency_ms, 2),
             cached=cached,
+            answer_usage=answer_usage,
         )
         self.records.append(rec)
         logger.info("usage %s", json.dumps(asdict(rec)))
@@ -83,11 +88,20 @@ class UsageLog:
         return out
 
     def savings_vs_all_tier3(self, settings: Settings) -> dict:
+        """Cost saved by the staging engine vs answering every query at Tier 3.
+
+        Only the *answer-generation* work moves to Tier 3 in the baseline; the fixed
+        Tier-1 overhead (the router that classifies every message + the Tier-1 verifier)
+        is unavoidable and stays at Tier 1 in BOTH worlds, so it cancels out. For records
+        without a recorded answer split, the whole request is treated as answer-generation
+        (the pre-per-stage behaviour)."""
         actual = sum(r.cost_usd for r in self.records)
-        hypothetical = sum(
-            estimate_cost(3, TokenUsage(r.prompt_tokens, r.completion_tokens), settings)
-            for r in self.records
-        )
+        hypothetical = 0.0
+        for r in self.records:
+            answer = r.answer_usage if r.answer_usage is not None \
+                else TokenUsage(r.prompt_tokens, r.completion_tokens)
+            moved = estimate_cost(3, answer, settings) - estimate_cost(r.tier, answer, settings)
+            hypothetical += r.cost_usd + moved
         savings = hypothetical - actual
         pct = (savings / hypothetical) if hypothetical else 0.0
         return {"actual_cost_usd": round(actual, 8), "all_tier3_cost_usd": round(hypothetical, 8),

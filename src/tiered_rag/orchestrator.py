@@ -37,6 +37,7 @@ class ExecutionResult:
 
     usage: TokenUsage = field(default_factory=TokenUsage)
     usage_by_tier: dict[int, TokenUsage] = field(default_factory=dict)  # billing-tier -> tokens
+    answer_usage: TokenUsage = field(default_factory=TokenUsage)        # executor (answer-gen) only
     reason: str = ""
     plan: str | None = None
     verified: bool | None = None          # None = not applicable/not run
@@ -303,6 +304,7 @@ class Orchestrator:
             res = Tier1Executor(self.retriever, self.llm_for(1)).execute(query, sel.plan)
 
         executor_usage = res.usage   # every executor LLM call ran on the route-tier model
+        res.answer_usage = executor_usage   # the answer-gen work the all-Tier-3 baseline re-prices
         res = self._guardrail(query, res)   # may add verifier tokens into the tier-1 bucket
 
         # Per-stage billing: route-tier work at its tier, router (always tier-1) at tier-1.

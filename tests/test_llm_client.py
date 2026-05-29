@@ -48,6 +48,14 @@ def test_build_llm_mock_tier_selects_port():
     assert build_llm(s, tier=3).base_url.endswith(":9103/v1")
 
 
+def test_build_llm_openai_respects_per_tier_models():
+    s = Settings(llm_type="openai", openai_base_url="http://x/v1", openai_api_key="k",
+                 openai_model="base", openai_tier2_model="pro", openai_tier3_model="frontier")
+    assert build_llm(s, 1).model == "base"      # unset tier-1 -> falls back to openai_model
+    assert build_llm(s, 2).model == "pro"
+    assert build_llm(s, 3).model == "frontier"
+
+
 def test_complete_retries_transient_transport_error(monkeypatch):
     """A transient DNS/connect blip should be retried, not surfaced as a crash."""
     calls = {"n": 0}
