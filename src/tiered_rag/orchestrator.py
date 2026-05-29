@@ -221,9 +221,10 @@ class Tier3Executor:
 
 class Orchestrator:
     def __init__(self, router: Router, retriever: Retriever, catalog: dict,
-                 llm_for: Callable[[int], LLMClient], verifier: Verifier | None = None):
+                 llm_for: Callable[[int], LLMClient], verifier: Verifier | None = None,
+                 tier3_max_steps: int = 5):
         self.router, self.retriever, self.catalog = router, retriever, catalog
-        self.llm_for, self.verifier = llm_for, verifier
+        self.llm_for, self.verifier, self.tier3_max_steps = llm_for, verifier, tier3_max_steps
 
     def _guardrail(self, query: str, res: ExecutionResult) -> ExecutionResult:
         if res.abstained:
@@ -246,8 +247,8 @@ class Orchestrator:
         if sel.tier == 2:
             res = Tier2Executor(self.llm_for(2), self.catalog).execute(query)
         elif sel.tier == 3:
-            res = ExecutionResult(tier=3,
-                                  answer="[stub] would run the Tier-3 multi-step chain (Phase 6)")
+            res = Tier3Executor(self.llm_for(3), self.retriever, self.catalog,
+                                self.tier3_max_steps).execute(query)
         else:
             res = Tier1Executor(self.retriever, self.llm_for(1)).execute(query, sel.plan)
 

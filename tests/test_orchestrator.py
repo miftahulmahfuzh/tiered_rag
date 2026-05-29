@@ -14,7 +14,9 @@ def test_orchestrator_tier2(fake_embedder):
     assert "Dragon Skin" in res.answer
 
 
-def test_orchestrator_tier3_is_stub(fake_embedder):
-    res = build_orchestrator(fake_embedder, 3).run("everything is broken, escalate")
+def test_orchestrator_tier3_runs_real_chain(fake_embedder):
+    res = build_orchestrator(fake_embedder, 3).run("I was double-charged and got locked out")
     assert res.tier == 3
-    assert "stub" in res.answer.lower()
+    assert "stub" not in res.answer.lower()
+    assert "[step 1]" in res.final_input_context and "[step 2]" in res.final_input_context
+    assert res.usage.total_tokens > 0          # routing + plan + steps + synth aggregated

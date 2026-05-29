@@ -50,7 +50,8 @@ def get_orchestrator() -> Orchestrator:
     catalog = catalog_index(load_item_details(s.item_details_path))
     verifier = Verifier(build_llm(s, 1)) if s.verify_answers else None
     return Orchestrator(router, retriever, catalog,
-                        llm_for=lambda tier: build_llm(s, tier), verifier=verifier)
+                        llm_for=lambda tier: build_llm(s, tier), verifier=verifier,
+                        tier3_max_steps=s.tier3_max_steps)
 
 
 def get_usage_log(request: Request) -> UsageLog:

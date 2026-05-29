@@ -32,5 +32,13 @@ def build_orchestrator(fake_embedder, route_tier, route_plan=None, verifier=None
                                                "args": {"item_id": "SKU-07"}}]})
                         if "plan" in system.lower() else user)
             return FakeLLM(r)
+        if tier == 3:
+            plan = json.dumps({"steps": [
+                {"instruction": "assess the issue", "tool": None, "args": {}},
+                {"instruction": "recommend next steps", "tool": None, "args": {}}]})
+
+            def r3(system, user):
+                return plan if "planner" in system.lower() else user
+            return FakeLLM(r3)
         return FakeLLM(lambda s, u: u)
     return Orchestrator(router, build_retriever(fake_embedder), CATALOG, llm_for, verifier=verifier)

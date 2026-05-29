@@ -46,3 +46,10 @@ def test_greeting_skips_verification(fake_embedder):
     assert res.answer != PENDING_REVIEW        # no evidence -> verifier never runs
     assert res.verified is None
     assert res.gap is None
+
+
+def test_tier3_unverified_is_escalated(fake_embedder):
+    res = build_orchestrator(fake_embedder, 3, verifier=REJECT).run("complex sensitive complaint")
+    assert res.answer == PENDING_REVIEW
+    assert res.verified is False
+    assert res.gap is not None and res.gap.kind == "unverified"
