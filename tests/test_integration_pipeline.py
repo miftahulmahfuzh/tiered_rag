@@ -20,6 +20,7 @@ def test_pipeline_end_to_end_via_mocks(monkeypatch):
     if not _up(s.mock_llm_base_url):
         pytest.skip("mock tier servers not running")
     monkeypatch.setenv("LLM_TYPE", "mock")
+    monkeypatch.setenv("CACHE_ENABLED", "false")   # exercise the pipeline, not the cache
     client = TestClient(create_app())
     body = client.post("/chat", json={"query": "give me the full details for item SKU-07"}).json()
     assert body["tier"] == 2
@@ -31,6 +32,7 @@ def test_pipeline_guardrail_does_not_break_mocks(monkeypatch):
     if not _up(s.mock_llm_base_url):
         pytest.skip("mock tier servers not running")
     monkeypatch.setenv("LLM_TYPE", "mock")
+    monkeypatch.setenv("CACHE_ENABLED", "false")   # exercise the pipeline, not the cache
     client = TestClient(create_app())
     body = client.post("/chat", json={"query": "give me the full details for item SKU-07"}).json()
     assert body["tier"] == 2
@@ -46,6 +48,7 @@ def test_pipeline_tier3_chain_via_mocks(monkeypatch):
     if not _up(s.mock_llm_base_url):
         pytest.skip("mock tier servers not running")
     monkeypatch.setenv("LLM_TYPE", "mock")
+    monkeypatch.setenv("CACHE_ENABLED", "false")   # exercise the pipeline, not the cache
     client = TestClient(create_app())
     body = client.post(
         "/chat",

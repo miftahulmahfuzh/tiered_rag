@@ -4,10 +4,19 @@ services:
     ports: ["6333:6333", "6334:6334"]
     volumes: ["./qdrant_storage:/qdrant/storage"]
 
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
   mock_tier1:
     build: .
     command: python -m tiered_rag.mock_llm --tier 1 --port 9101
     ports: ["9101:9101"]
+  # a second Tier-1 worker so the gateway can demo health-check failover
+  mock_tier1b:
+    build: .
+    command: python -m tiered_rag.mock_llm --tier 1 --port 9111
+    ports: ["9111:9111"]
   mock_tier2:
     build: .
     command: python -m tiered_rag.mock_llm --tier 2 --port 9102
@@ -16,3 +25,20 @@ services:
     build: .
     command: python -m tiered_rag.mock_llm --tier 3 --port 9103
     ports: ["9103:9103"]
+
+  # failover-capable, cache-backed gateway
+  gateway:
+    build: .
+    command: uvicorn tiered_rag.api:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    environment:
+      LLM_TYPE: mock
+      # two Tier-1 workers -> build_llm wraps them in a FailoverLLM pool
+      MOCK_TIER1_WORKERS: http://mock_tier1:9101/v1,http://mock_tier1b:9111/v1
+      MOCK_TIER2_BASE_URL: http://mock_tier2:9102/v1
+      MOCK_TIER3_BASE_URL: http://mock_tier3:9103/v1
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [redis, qdrant, mock_tier1, mock_tier1b, mock_tier2, mock_tier3]
