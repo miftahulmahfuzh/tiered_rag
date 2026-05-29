@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     qdrant_collection: str = "knowledge_base"
     confidence_threshold: float = 0.6
 
+    # --- LLM backend (Phase 2+) ---
+    llm_type: str = "openai"  # "openai" | "mock"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.4-nano"
+    openai_base_url: str = "https://api.openai.com/v1"
+    mock_llm_base_url: str = "http://localhost:9101/v1"  # Tier-1 mock; servers wired in Phase 3
+    router_temperature: float = 0.0
+
 
 def get_settings() -> Settings:
     return Settings()
