@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = ["integration: hits real ollama/qdrant (deselect with -m 'not integration')"]

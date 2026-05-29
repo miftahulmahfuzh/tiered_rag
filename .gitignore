@@ -1,2 +1,6 @@
 requiremen.txt
 .env
+__pycache__/
+*.pyc
+.pytest_cache/
+qdrant_storage/
