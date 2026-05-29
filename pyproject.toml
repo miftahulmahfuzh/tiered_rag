@@ -1,3 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiered_rag"
+version = "0.1.0"
+description = "Zero-hallucination, multi-tier support chatbot backend"
+requires-python = ">=3.10"
+dependencies = [
+    "qdrant-client>=1.9",
+    "httpx>=0.27",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
