@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "redis>=5.0",
 ]
 
 [tool.setuptools.packages.find]
