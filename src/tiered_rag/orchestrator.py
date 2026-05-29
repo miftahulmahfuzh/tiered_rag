@@ -161,6 +161,64 @@ class Tier2Executor:
                                tool_calls=tool_calls, usage=usage)
 
 
+class Tier3Executor:
+    """Sequential multi-step reasoning chain (each step's output threads into the next)."""
+
+    def __init__(self, llm: LLMClient, retriever: Retriever | None, catalog: dict, max_steps: int = 5):
+        self.llm, self.retriever, self.catalog, self.max_steps = llm, retriever, catalog, max_steps
+
+    def _plan(self, query: str) -> tuple[Tier3Plan, TokenUsage]:
+        resp = self.llm.complete(TIER3_PLAN_SYSTEM, query)
+        try:
+            plan = Tier3Plan(**_extract_json(resp.content))
+        except Exception:
+            plan = Tier3Plan(steps=[])
+        return plan, resp.usage
+
+    def _run_step(self, i: int, step: ChainStep, query: str,
+                  transcript: list[str]) -> tuple[str, dict | None, TokenUsage]:
+        if step.tool == "retrieve":
+            if self.retriever is None:
+                result = {"error": "no retriever available"}
+            else:
+                rr = self.retriever.retrieve(step.args.get("query") or query)
+                result = {"answer": rr.answer, "abstain": rr.abstain, "score": round(rr.score, 3)}
+            call = {"step": i, "tool": "retrieve", "args": step.args, "result": result}
+            return f"[step {i}] retrieve -> {json.dumps(result)}", call, TokenUsage()
+        if step.tool:
+            try:
+                result = run_tool(step.tool, step.args, self.catalog)
+            except KeyError:
+                result = {"error": f"unknown tool: {step.tool}"}
+            except Exception as e:  # bad args, etc. — never crash the chain
+                result = {"error": str(e)}
+            call = {"step": i, "tool": step.tool, "args": step.args, "result": result}
+            return f"[step {i}] {step.tool}({step.args}) -> {json.dumps(result)}", call, TokenUsage()
+        # reasoning step: thread the running transcript forward
+        prior = "\n".join(transcript)
+        user = f"PRIOR STEPS:\n{prior}\n\nNOW DO: {step.instruction}" if prior else step.instruction
+        r = self.llm.complete(TIER3_STEP_SYSTEM, user)
+        return f"[step {i}] {step.instruction} -> {r.content}", None, r.usage
+
+    def execute(self, query: str) -> ExecutionResult:
+        plan, usage = self._plan(query)
+        transcript: list[str] = []
+        tool_calls: list[dict] = []
+        for i, step in enumerate(plan.steps[: self.max_steps], start=1):
+            line, call, step_usage = self._run_step(i, step, query, transcript)
+            transcript.append(line)
+            if call is not None:
+                tool_calls.append(call)
+            usage = TokenUsage(usage.prompt_tokens + step_usage.prompt_tokens,
+                               usage.completion_tokens + step_usage.completion_tokens)
+        context = "\n".join(transcript)
+        synth = synthesize(self.llm, FAQ_SYSTEM, context, query)
+        usage = TokenUsage(usage.prompt_tokens + synth.usage.prompt_tokens,
+                           usage.completion_tokens + synth.usage.completion_tokens)
+        return ExecutionResult(tier=3, answer=synth.content, final_input_context=context,
+                               tool_calls=tool_calls, usage=usage)
+
+
 class Orchestrator:
     def __init__(self, router: Router, retriever: Retriever, catalog: dict,
                  llm_for: Callable[[int], LLMClient], verifier: Verifier | None = None):
