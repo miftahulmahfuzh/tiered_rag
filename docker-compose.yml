@@ -40,5 +40,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       OLLAMA_HOST: http://host.docker.internal:11434
+      # Phase 8: Telegram front-end — pass through from the host .env (kept out of this file)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [redis, qdrant, mock_tier1, mock_tier1b, mock_tier2, mock_tier3]
