@@ -63,7 +63,12 @@ class OpenAICompatLLM:
         return LLMResponse(content=content, usage=usage)
 
 
-def build_llm(settings) -> LLMClient:
+def build_llm(settings, tier: int = 1) -> LLMClient:
     if settings.llm_type == "mock":
-        return OpenAICompatLLM(settings.mock_llm_base_url, "mock-key", settings.openai_model)
+        url = {
+            1: settings.mock_llm_base_url,
+            2: settings.mock_tier2_base_url,
+            3: settings.mock_tier3_base_url,
+        }.get(tier, settings.mock_llm_base_url)
+        return OpenAICompatLLM(url, "mock-key", settings.openai_model)
     return OpenAICompatLLM(settings.openai_base_url, settings.openai_api_key, settings.openai_model)
