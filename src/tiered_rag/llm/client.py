@@ -65,10 +65,8 @@ class OpenAICompatLLM:
 
 def build_llm(settings, tier: int = 1) -> LLMClient:
     if settings.llm_type == "mock":
-        url = {
-            1: settings.mock_llm_base_url,
-            2: settings.mock_tier2_base_url,
-            3: settings.mock_tier3_base_url,
-        }.get(tier, settings.mock_llm_base_url)
-        return OpenAICompatLLM(url, "mock-key", settings.openai_model)
+        from .failover import FailoverLLM
+        urls = settings.tier_workers(tier)
+        clients = [OpenAICompatLLM(u, "mock-key", settings.openai_model) for u in urls]
+        return clients[0] if len(clients) == 1 else FailoverLLM(clients)
     return OpenAICompatLLM(settings.openai_base_url, settings.openai_api_key, settings.openai_model)
