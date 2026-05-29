@@ -42,3 +42,9 @@ def test_phase3_mock_and_cost_defaults():
 
 def test_phase4_item_details_path_default():
     assert Settings().item_details_path.endswith("item_details.xlsx")
+
+
+def test_phase5_guardrail_defaults():
+    s = Settings()
+    assert s.alert_webhook_url == ""        # log-only by default
+    assert s.verify_answers is True         # guardrail on by default

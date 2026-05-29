@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # --- Tier-2 structured extraction (Phase 4) ---
     item_details_path: str = "xlsx/item_details.xlsx"
 
+    # --- Zero-hallucination guardrails (Phase 5) ---
+    verify_answers: bool = True            # run the verifier on grounded answers
+    alert_webhook_url: str = ""            # empty -> log-only knowledge-gap alerts
+
 
 def get_settings() -> Settings:
     return Settings()
