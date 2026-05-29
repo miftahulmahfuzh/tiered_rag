@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     mock_llm_base_url: str = "http://localhost:9101/v1"  # Tier-1 mock; servers wired in Phase 3
     router_temperature: float = 0.0
 
+    # --- Mock tier servers (Phase 3): separate ports per tier ---
+    # tier-1 == mock_llm_base_url above (the router backend)
+    mock_tier2_base_url: str = "http://localhost:9102/v1"
+    mock_tier3_base_url: str = "http://localhost:9103/v1"
+
+    # --- Simulated token cost (Phase 3): USD per 1K tokens ---
+    cost_input_per_1k: float = 0.00015
+    cost_output_per_1k: float = 0.00060
+    tier2_cost_multiplier: float = 3.0   # tier-1 baseline is 1.0
+    tier3_cost_multiplier: float = 10.0
+
 
 def get_settings() -> Settings:
     return Settings()

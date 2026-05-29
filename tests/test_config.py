@@ -27,3 +27,14 @@ def test_llm_defaults():
 def test_llm_type_override(monkeypatch):
     monkeypatch.setenv("LLM_TYPE", "mock")
     assert Settings().llm_type == "mock"
+
+
+def test_phase3_mock_and_cost_defaults():
+    s = Settings()
+    # tier-1 mock is the existing mock_llm_base_url (:9101)
+    assert s.mock_llm_base_url.endswith(":9101/v1")
+    assert s.mock_tier2_base_url.endswith(":9102/v1")
+    assert s.mock_tier3_base_url.endswith(":9103/v1")
+    assert s.cost_input_per_1k > 0 and s.cost_output_per_1k > 0
+    # deeper tiers are simulated as more expensive
+    assert s.tier3_cost_multiplier > s.tier2_cost_multiplier > 1.0
