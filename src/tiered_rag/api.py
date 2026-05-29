@@ -2,11 +2,17 @@ import time
 
 from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel
+from qdrant_client import QdrantClient
 
 from .config import Settings, get_settings
+from .embeddings import OllamaEmbedder
+from .knowledge_base import catalog_index, load_item_details
 from .llm.client import build_llm
 from .observability import UsageLog
+from .orchestrator import Orchestrator
+from .retrieval import Retriever
 from .router import Router
+from .vector_store import QdrantStore
 
 
 class ChatRequest(BaseModel):
@@ -24,7 +30,7 @@ class ChatResponse(BaseModel):
     tier: int
     reason: str
     plan: str | None
-    answer: str  # stubbed in Phase 2/3; real execution lands in Phase 4/6
+    answer: str
     usage: Usage
 
 
@@ -32,9 +38,13 @@ def get_settings_dep() -> Settings:
     return get_settings()
 
 
-def get_router() -> Router:
+def get_orchestrator() -> Orchestrator:
     s = get_settings()
-    return Router(build_llm(s), temperature=s.router_temperature)
+    router = Router(build_llm(s, 1), temperature=s.router_temperature)
+    store = QdrantStore(QdrantClient(url=s.qdrant_url), s.qdrant_collection)
+    retriever = Retriever(store, OllamaEmbedder(s.ollama_host, s.embed_model), s.confidence_threshold)
+    catalog = catalog_index(load_item_details(s.item_details_path))
+    return Orchestrator(router, retriever, catalog, llm_for=lambda tier: build_llm(s, tier))
 
 
 def get_usage_log(request: Request) -> UsageLog:
@@ -52,21 +62,19 @@ def create_app() -> FastAPI:
     @app.post("/chat", response_model=ChatResponse)
     def chat(
         req: ChatRequest,
-        router: Router = Depends(get_router),
+        orchestrator: Orchestrator = Depends(get_orchestrator),
         usage_log: UsageLog = Depends(get_usage_log),
         settings: Settings = Depends(get_settings_dep),
     ):
         t0 = time.perf_counter()
-        result = router.route_detailed(req.query)
+        res = orchestrator.run(req.query)
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        sel = result.selection
         rec = usage_log.record(
-            tier=sel.tier, model=settings.openai_model,
-            usage=result.usage, latency_ms=latency_ms, settings=settings,
+            tier=res.tier, model=settings.openai_model,
+            usage=res.usage, latency_ms=latency_ms, settings=settings,
         )
         return ChatResponse(
-            tier=sel.tier, reason=sel.reason, plan=sel.plan,
-            answer=f"[stub] would execute the Tier-{sel.tier} pipeline (Phase 4/6)",
+            tier=res.tier, reason=res.reason, plan=res.plan, answer=res.answer,
             usage=Usage(
                 prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
                 total_tokens=rec.total_tokens, cost_usd=rec.cost_usd,
