@@ -44,6 +44,17 @@ def build_orchestrator(fake_embedder, route_tier, route_plan=None, verifier=None
     return Orchestrator(router, build_retriever(fake_embedder), CATALOG, llm_for, verifier=verifier)
 
 
+class FakeTelegramClient:
+    """Test double recording (chat_id, text) sends for the webhook tests (Phase 8)."""
+
+    def __init__(self):
+        self.sent = []
+
+    def send_message(self, chat_id, text):
+        self.sent.append((chat_id, text))
+        return {"ok": True}
+
+
 class _SpyOrchestrator:
     """Wraps an Orchestrator and counts .run() calls (proves a cache hit skips it)."""
 

@@ -97,3 +97,40 @@ def test_chat_does_not_cache_escalations(fake_embedder):
     second = client.post("/chat", json={"query": "how do I reset my password"}).json()
     assert second["cached"] is False                  # escalation not cached -> orchestrator ran again
     assert spy.calls == 2
+
+
+def test_telegram_webhook_replies_with_chat_answer(fake_embedder):
+    from tests._helpers import FakeTelegramClient, build_cached_client
+    from tiered_rag.api import get_telegram
+    client, spy = build_cached_client(fake_embedder, 1, "faq")
+    tg = FakeTelegramClient()
+    client.app.dependency_overrides[get_telegram] = lambda: tg
+    update = {"update_id": 1, "message": {"chat": {"id": 99}, "text": "how do I reset my password"}}
+    body = client.post("/telegram/webhook", json=update).json()
+    assert body == {"ok": True}
+    assert tg.sent and tg.sent[0][0] == 99          # replied to the right chat
+    assert tg.sent[0][1]                            # the pipeline produced a non-empty answer
+    assert spy.calls == 1                           # the shared chat pipeline ran
+
+
+def test_telegram_webhook_ignores_non_message_update(fake_embedder):
+    from tests._helpers import FakeTelegramClient, build_cached_client
+    from tiered_rag.api import get_telegram
+    client, _ = build_cached_client(fake_embedder, 1, "faq")
+    tg = FakeTelegramClient()
+    client.app.dependency_overrides[get_telegram] = lambda: tg
+    body = client.post("/telegram/webhook", json={"update_id": 2}).json()
+    assert body == {"ok": True} and tg.sent == []
+
+
+def test_telegram_webhook_rejects_bad_secret(fake_embedder, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s3cr3t")
+    from tests._helpers import FakeTelegramClient, build_cached_client
+    from tiered_rag.api import get_telegram
+    client, _ = build_cached_client(fake_embedder, 1, "faq")
+    tg = FakeTelegramClient()
+    client.app.dependency_overrides[get_telegram] = lambda: tg
+    update = {"message": {"chat": {"id": 1}, "text": "hi"}}
+    body = client.post("/telegram/webhook", json=update,
+                       headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"}).json()
+    assert body["ok"] is False and tg.sent == []
