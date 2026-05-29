@@ -41,3 +41,39 @@ def test_cacheable_excludes_abstain_and_escalation():
     assert not cacheable(ExecutionResult(tier=1, answer="idk", abstained=True))
     esc = ExecutionResult(tier=2, answer="pending", gap=GapAlert(kind="unverified", query="q", answer="a"))
     assert not cacheable(esc)
+
+
+class FakeRedis:
+    """Minimal in-process double of the redis ops RedisCacheBackend uses."""
+    def __init__(self):
+        self.store: dict[str, dict] = {}
+
+    def hset(self, key, mapping):
+        self.store.setdefault(key, {}).update(mapping)
+
+    def expire(self, key, ttl):  # TTL behaviour is not asserted offline
+        return True
+
+    def keys(self, pattern):
+        prefix = pattern.rstrip("*")
+        return [k for k in self.store if k.startswith(prefix)]
+
+    def hgetall(self, key):
+        return self.store.get(key, {})
+
+
+def test_redis_backend_round_trips_an_entry():
+    from tiered_rag.cache import RedisCacheBackend, SemanticCache
+    from tiered_rag.embeddings import FakeEmbedder
+    backend = RedisCacheBackend(FakeRedis(), prefix="t:cache", ttl=60, max_entries=4)
+    c = SemanticCache(FakeEmbedder(dim=64), backend, threshold=0.95)
+    c.put("reset my password", {"answer": "Open Settings > Security > Reset.", "tier": 1})
+    assert c.get("reset my password")["answer"].startswith("Open Settings")
+
+
+def test_redis_backend_bounds_entries_by_modulo():
+    from tiered_rag.cache import RedisCacheBackend
+    backend = RedisCacheBackend(FakeRedis(), prefix="t:cache", ttl=60, max_entries=2)
+    for i in range(5):
+        backend.add([float(i)] * 4, {"answer": f"a{i}"})
+    assert len(backend.scan()) == 2                            # rolls over mod max_entries

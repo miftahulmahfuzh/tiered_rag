@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from typing import Protocol
 
@@ -55,3 +56,25 @@ class SemanticCache:
 
     def put(self, query: str, payload: dict) -> None:
         self.backend.add(self.embedder.embed_query(query), {**payload, "query": query})
+
+
+class RedisCacheBackend:
+    def __init__(self, client, prefix: str, ttl: int, max_entries: int):
+        self.client, self.prefix, self.ttl, self.max_entries = client, prefix, ttl, max_entries
+        self._n = 0
+
+    def add(self, vector: list[float], payload: dict) -> None:
+        key = f"{self.prefix}:{self._n % self.max_entries}"
+        self._n += 1
+        self.client.hset(key, mapping={"vector": json.dumps(vector), "payload": json.dumps(payload)})
+        self.client.expire(key, self.ttl)
+
+    def scan(self) -> list[tuple[list[float], dict]]:
+        out: list[tuple[list[float], dict]] = []
+        for key in self.client.keys(f"{self.prefix}:*"):
+            h = self.client.hgetall(key)
+            vec_raw, pay_raw = h.get("vector"), h.get("payload")
+            if vec_raw is None or pay_raw is None:
+                continue
+            out.append((json.loads(vec_raw), json.loads(pay_raw)))
+        return out
