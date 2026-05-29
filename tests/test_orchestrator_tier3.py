@@ -30,6 +30,30 @@ def test_tier3_threads_context_and_grounds_answer():
     assert res.usage.total_tokens > 0                      # plan + 2 steps + synth aggregated
 
 
+def test_tier3_plan_label_is_multi_step_chain():
+    # explainability: tier-3 carries a stable plan label all the way to the output
+    steps = [{"instruction": "assess the issue", "tool": None, "args": {}}]
+    res = Tier3Executor(_chain_llm(steps), retriever=None, catalog=CATALOG).execute("everything broke")
+    assert res.plan == "multi_step_chain"
+
+
+def test_tier3_steps_surface_the_full_planned_chain():
+    # the full ordered chain — including reasoning-only steps — is surfaced for explainability,
+    # while tool_calls stays the tool/retrieve subset (backward compat).
+    steps = [{"instruction": "assess the issue", "tool": None, "args": {}},
+             {"instruction": "look up the item", "tool": "get_item_details_from_xlsx",
+              "args": {"item_id": "SKU-07"}},
+             {"instruction": "recommend next steps", "tool": None, "args": {}}]
+    res = Tier3Executor(_chain_llm(steps), retriever=None, catalog=CATALOG).execute("everything broke")
+    assert [s["step"] for s in res.steps] == [1, 2, 3]
+    assert res.steps[0]["tool"] is None
+    assert res.steps[0]["instruction"] == "assess the issue"
+    assert "output" in res.steps[0]                      # reasoning step carries its LLM output
+    assert res.steps[1]["tool"] == "get_item_details_from_xlsx"
+    assert res.steps[1]["result"]["name"] == "Dragon Skin"
+    assert len(res.tool_calls) == 1                       # only the real tool call
+
+
 def test_tier3_tool_step_uses_registry():
     steps = [{"instruction": "look up the item", "tool": "get_item_details_from_xlsx",
               "args": {"item_id": "SKU-07"}}]

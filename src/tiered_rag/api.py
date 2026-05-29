@@ -40,6 +40,7 @@ class ChatResponse(BaseModel):
     verified: bool | None = None
     pending_review: bool = False
     cached: bool = False
+    steps: list[dict] = []   # tier-2/3 executed tool calls (tool, args, result); [] for tier-1
 
 
 def get_settings_dep() -> Settings:
@@ -132,7 +133,7 @@ def process_query(
                 tier=hit["tier"], reason=hit.get("reason", ""), plan=hit.get("plan"),
                 answer=hit["answer"], verified=hit.get("verified"), pending_review=False,
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=0.0),
-                cached=True,
+                cached=True, steps=hit.get("steps", []),
             )
 
     t0 = time.perf_counter()
@@ -147,7 +148,7 @@ def process_query(
     # --- only *served* answers are cached (never abstain/escalation) ---
     if cache is not None and cacheable(res):
         cache.put(query, {"answer": res.answer, "tier": res.tier, "reason": res.reason,
-                          "plan": res.plan, "verified": res.verified})
+                          "plan": res.plan, "verified": res.verified, "steps": res.steps})
     return ChatResponse(
         tier=res.tier, reason=res.reason, plan=res.plan, answer=res.answer,
         verified=res.verified,
@@ -156,7 +157,7 @@ def process_query(
             prompt_tokens=rec.prompt_tokens, completion_tokens=rec.completion_tokens,
             total_tokens=rec.total_tokens, cost_usd=rec.cost_usd,
         ),
-        cached=False,
+        cached=False, steps=res.steps,
     )
 
 

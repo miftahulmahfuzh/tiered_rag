@@ -33,6 +33,8 @@ class ExecutionResult:
     answer: str
     final_input_context: str = ""
     tool_calls: list[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)   # full ordered plan surfaced to the output
+
     usage: TokenUsage = field(default_factory=TokenUsage)
     reason: str = ""
     plan: str | None = None
@@ -95,6 +97,11 @@ TIER2_PLAN_SYSTEM = (
     'Reply with JSON only: {"calls": [{"tool": "<name>", "args": {<k>: <v>}}, ...]}. '
     "Use an empty list if no tool is needed."
 )
+
+
+# Stable plan labels carried to the output for tier 2/3 (tier-1 labels live in the router).
+TIER2_PLAN_LABEL = "tool_pipeline"
+TIER3_PLAN_LABEL = "multi_step_chain"
 
 
 class ToolCall(BaseModel):
@@ -166,7 +173,8 @@ class Tier2Executor:
             plan_usage.completion_tokens + synth.usage.completion_tokens,
         )
         return ExecutionResult(tier=2, answer=synth.content, final_input_context=context,
-                               tool_calls=tool_calls, usage=usage)
+                               tool_calls=tool_calls, steps=tool_calls, usage=usage,
+                               plan=TIER2_PLAN_LABEL)
 
 
 class Tier3Executor:
@@ -184,42 +192,50 @@ class Tier3Executor:
         return plan, resp.usage
 
     def _run_step(self, i: int, step: ChainStep, query: str,
-                  transcript: list[str]) -> tuple[str, dict | None, TokenUsage]:
+                  transcript: list[str]) -> tuple[str, dict, TokenUsage]:
+        """Run one step and return (transcript line, structured step record, token usage).
+
+        The record always carries ``step``/``instruction``/``tool``; tool & retrieve steps
+        add ``args``/``result``, a reasoning step (tool=null) adds its ``output``."""
+        base = {"step": i, "instruction": step.instruction, "tool": step.tool}
         if step.tool == "retrieve":
             if self.retriever is None:
                 result = {"error": "no retriever available"}
             else:
                 rr = self.retriever.retrieve(step.args.get("query") or query)
                 result = {"answer": rr.answer, "abstain": rr.abstain, "score": round(rr.score, 3)}
-            call = {"step": i, "tool": "retrieve", "args": step.args, "result": result}
-            return f"[step {i}] retrieve -> {json.dumps(result)}", call, TokenUsage()
+            rec = {**base, "args": step.args, "result": result}
+            return f"[step {i}] retrieve -> {json.dumps(result)}", rec, TokenUsage()
         if step.tool:
             result = _dispatch(step.tool, step.args, self.catalog)
-            call = {"step": i, "tool": step.tool, "args": step.args, "result": result}
-            return f"[step {i}] {step.tool}({step.args}) -> {json.dumps(result)}", call, TokenUsage()
+            rec = {**base, "args": step.args, "result": result}
+            return f"[step {i}] {step.tool}({step.args}) -> {json.dumps(result)}", rec, TokenUsage()
         # reasoning step: thread the running transcript forward
         prior = "\n".join(transcript)
         user = f"PRIOR STEPS:\n{prior}\n\nNOW DO: {step.instruction}" if prior else step.instruction
         r = self.llm.complete(TIER3_STEP_SYSTEM, user)
-        return f"[step {i}] {step.instruction} -> {r.content}", None, r.usage
+        rec = {**base, "output": r.content}
+        return f"[step {i}] {step.instruction} -> {r.content}", rec, r.usage
 
     def execute(self, query: str) -> ExecutionResult:
         plan, usage = self._plan(query)
         transcript: list[str] = []
-        tool_calls: list[dict] = []
+        steps: list[dict] = []
         for i, step in enumerate(plan.steps[: self.max_steps], start=1):
-            line, call, step_usage = self._run_step(i, step, query, transcript)
+            line, rec, step_usage = self._run_step(i, step, query, transcript)
             transcript.append(line)
-            if call is not None:
-                tool_calls.append(call)
+            steps.append(rec)
             usage = TokenUsage(usage.prompt_tokens + step_usage.prompt_tokens,
                                usage.completion_tokens + step_usage.completion_tokens)
+        # tool_calls is the tool/retrieve subset (reasoning steps have no tool)
+        tool_calls = [s for s in steps if s["tool"] is not None]
         context = "\n".join(transcript)
         synth = synthesize(self.llm, FAQ_SYSTEM, context, query)
         usage = TokenUsage(usage.prompt_tokens + synth.usage.prompt_tokens,
                            usage.completion_tokens + synth.usage.completion_tokens)
         return ExecutionResult(tier=3, answer=synth.content, final_input_context=context,
-                               tool_calls=tool_calls, usage=usage)
+                               tool_calls=tool_calls, steps=steps, usage=usage,
+                               plan=TIER3_PLAN_LABEL)
 
 
 class Orchestrator:

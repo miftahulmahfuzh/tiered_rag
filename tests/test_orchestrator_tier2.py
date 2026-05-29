@@ -30,6 +30,13 @@ def test_tier2_runs_planned_tools_and_grounds_answer():
     assert res.usage.total_tokens > 0             # plan + synth aggregated
 
 
+def test_tier2_plan_label_is_tool_pipeline():
+    # explainability: tier-2 carries a stable plan label all the way to the output
+    calls = [{"tool": "get_item_details_from_xlsx", "args": {"item_id": "SKU-07"}}]
+    res = Tier2Executor(_planner(calls), CATALOG).execute("details for SKU-07")
+    assert res.plan == "tool_pipeline"
+
+
 def test_tier2_unknown_tool_does_not_crash():
     ex = Tier2Executor(_planner([{"tool": "bogus", "args": {}}]), CATALOG)
     res = ex.execute("do something weird")

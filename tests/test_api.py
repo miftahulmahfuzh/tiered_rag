@@ -37,6 +37,47 @@ def test_chat_returns_real_tier2_answer(fake_embedder):
     assert body["usage"]["total_tokens"] > 0
 
 
+def test_chat_tier2_exposes_plan_label_and_steps(fake_embedder):
+    # tier-2 must surface its plan label + the executed tool calls (args + results)
+    orch = build_orchestrator(fake_embedder, 2)
+    body = _client_with_orchestrator(orch).post(
+        "/chat", json={"query": "full details for SKU-07"}).json()
+    assert body["plan"] == "tool_pipeline"
+    assert body["steps"][0]["tool"] == "get_item_details_from_xlsx"
+    assert body["steps"][0]["args"] == {"item_id": "SKU-07"}
+    assert body["steps"][0]["result"]["name"] == "Dragon Skin"
+
+
+def test_chat_tier1_has_no_steps(fake_embedder):
+    # a plain tier-1 FAQ answer carries no tool steps
+    orch = build_orchestrator(fake_embedder, 1, "faq")
+    body = _client_with_orchestrator(orch).post(
+        "/chat", json={"query": "how do I reset my password"}).json()
+    assert body["plan"] == "faq"
+    assert body["steps"] == []
+
+
+def test_chat_tier3_exposes_full_planned_chain(fake_embedder):
+    # tier-3 surfaces every planned step (the fixture plans two reasoning steps)
+    orch = build_orchestrator(fake_embedder, 3)
+    body = _client_with_orchestrator(orch).post(
+        "/chat", json={"query": "my whole account broke and I'm furious"}).json()
+    assert body["plan"] == "multi_step_chain"
+    assert len(body["steps"]) == 2
+    assert body["steps"][0]["instruction"] == "assess the issue"
+    assert "output" in body["steps"][0]
+
+
+def test_cache_preserves_plan_and_steps_on_hit(fake_embedder):
+    from tests._helpers import build_cached_client
+    client, _ = build_cached_client(fake_embedder, 2, route_plan=None)
+    first = client.post("/chat", json={"query": "full details for SKU-07"}).json()
+    second = client.post("/chat", json={"query": "full details for SKU-07"}).json()
+    assert second["cached"] is True
+    assert second["plan"] == "tool_pipeline"
+    assert second["steps"] == first["steps"]
+
+
 def test_usage_endpoint_counts_requests_and_cost(fake_embedder):
     client = _client_with_orchestrator(build_orchestrator(fake_embedder, 2))  # fresh app -> fresh UsageLog
     client.post("/chat", json={"query": "full details for SKU-07"})
