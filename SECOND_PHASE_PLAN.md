@@ -793,12 +793,39 @@ The plan was followed task-by-task (RED → GREEN → COMMIT). Deviations/discov
 
 Commit map:
 
-| Task | Subject |
-|---|---|
-| 0 | `feat(p2): LLM backend config (LLM_TYPE/OpenAI/mock + router temperature)` |
-| 1 | `feat(p2): TierSelection structured-output schema` |
-| 2 | `feat(p2): LLMClient protocol + FakeLLM + OpenAICompatLLM + build_llm factory` |
-| 3 | `feat(p2): Router (prompt -> JSON parse -> TierSelection, Tier-1 fallback)` |
-| 4 | `feat(p2): routing-accuracy eval harness + labeled 6-category dataset` |
-| 5 | `feat(p2): FastAPI gateway /chat + /healthz (execution stubbed)` |
-| 6 | `feat(p2): real-OpenAI routing accuracy integration test + README` |
+| Task | Commit | Subject |
+|---|---|---|
+| 0 | `7c90093` | LLM backend config (LLM_TYPE/OpenAI/mock + router temperature) |
+| 1 | `f677c32` | TierSelection structured-output schema |
+| 2 | `93410c3` | LLMClient protocol + FakeLLM + OpenAICompatLLM + build_llm factory |
+| 3 | `91657f2` | Router (prompt → JSON parse → TierSelection, Tier-1 fallback) |
+| 4 | `4cf16f0` | routing-accuracy eval harness + labeled 6-category dataset |
+| 5 | `3715238` | FastAPI gateway /chat + /healthz (execution stubbed) |
+| 6 | `e76d362` | real-OpenAI routing accuracy integration test + README |
+| docs | `0ab268b` | mark Phase 2 plan complete + as-built deltas |
+
+### Resulting codebase state (end of Phase 2)
+
+```
+src/tiered_rag/
+├── config.py          # + LLM_TYPE / OpenAI / mock URLs / router_temperature
+├── router.py          # TierSelection + Router (prompt→JSON→validate→Tier-1 fallback)
+├── eval_routing.py    # evaluate(): accuracy, per_category, confusion, records
+├── api.py             # FastAPI gateway: GET /healthz, POST /chat (stub answer)
+├── llm/
+│   ├── __init__.py
+│   └── client.py      # LLMClient protocol + FakeLLM + OpenAICompatLLM + build_llm
+└── (Phase-1 modules: embeddings, vector_store, ingest, retrieval, eval_abstention, knowledge_base)
+
+tests/
+├── test_router_schema.py · test_router.py · test_llm_client.py
+├── test_eval_routing.py · test_api.py
+├── test_integration_routing.py   # @integration, real OpenAI, skips without a key
+└── data/routing_questions.py     # 16 labeled queries across the 6 categories
+```
+
+- **Suite:** 26 offline tests + 2 integration tests (Phase-1 RAG + Phase-2 routing), 0 warnings.
+- **Gateway entrypoint:** `uvicorn tiered_rag.api:app` (module-scope `app = create_app()`).
+- **Carried into later phases:** the `LLM_TYPE=mock` path is config-only (no servers yet) and
+  `plan` stays `None` — **Phase 3** stands up the mock tier servers + token logging, **Phase 4/6**
+  fill in execution and the inline/generated plans.
