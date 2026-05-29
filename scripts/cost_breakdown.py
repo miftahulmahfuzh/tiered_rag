@@ -1,10 +1,16 @@
 """Per-stage token + cost breakdown over the 6-category taxonomy (deterministic).
 
-Runs each taxonomy query once through the orchestrator on the MOCK backend, then
-reports tokens grouped by the BILLING tier (the tier of the model that actually ran
-each stage) so that cost = tokens x multiplier reconciles exactly. Also prints the
-all-Tier-3 baseline (router + verifier stay at Tier-1, only answer-generation moves
-to Tier-3) and the resulting routing saving.
+This measures TOKEN CONSUMPTION, not routing accuracy. Each taxonomy query is run
+through its CORRECT tier/path (the labeled tier), so every path is actually
+exercised -- greeting and classification really make their Tier-1 synth call
+instead of being misrouted by the deterministic mock router. The router still
+makes its real call (its tokens are the Tier-1 "overhead"); we only override its
+decision so the mock router's classification quirks don't skip a path. Routing
+accuracy is reported separately in EVAL_REPORT section 2.
+
+Tokens are grouped by the BILLING tier (the tier of the model that ran each
+stage) so cost = tokens x multiplier reconciles exactly. Also prints the per-query
+answer-gen vs router/verifier-overhead split and the all-Tier-3 saving baseline.
 
 Usage:
     docker compose up -d --build      # mock workers + Qdrant + Redis
@@ -21,18 +27,38 @@ from tiered_rag.llm.usage import TokenUsage
 from tiered_rag.observability import estimate_cost
 from tiered_rag.orchestrator import Orchestrator
 from tiered_rag.retrieval import Retriever
-from tiered_rag.router import Router
+from tiered_rag.router import RouteResult, Router, TierSelection
 from tiered_rag.vector_store import QdrantStore
 from tiered_rag.verifier import Verifier
 
-QUERIES = [
-    "hi there!",
-    "how do I reset my password?",
-    "is 'I keep getting logged out' Billing, Technical, or Account?",
-    "what's the status of order #12345?",
-    "give me the full details for item SKU-07",
-    "I was double-charged, the refund failed, and now I'm locked out",
+# query -> (correct tier, tier-1 plan) from the labeled taxonomy
+TAXONOMY = [
+    ("hi there!", 1, "greeting"),
+    ("how do I reset my password?", 1, "faq"),
+    ("is 'I keep getting logged out' Billing, Technical, or Account?", 1, "classification"),
+    ("what's the status of order #12345?", 2, None),
+    ("give me the full details for item SKU-07", 2, None),
+    ("I was double-charged, the refund failed, and now I'm locked out", 3, None),
 ]
+
+
+class OracleRouter(Router):
+    """Calls the real router (so its tokens count as Tier-1 overhead) but overrides the
+    decision with the labeled tier/plan, so every path is actually exercised regardless
+    of the deterministic mock router's classification quirks. This is a cost measurement
+    (token consumption), not a routing-accuracy measurement (that is section 2)."""
+
+    def __init__(self, llm, plan_map, temperature: float = 0.0):
+        super().__init__(llm, temperature)
+        self.plan_map = plan_map
+
+    def route_detailed(self, query: str) -> RouteResult:
+        real = super().route_detailed(query)   # real LLM call -> real Tier-1 overhead tokens
+        tier, plan = self.plan_map[query]
+        return RouteResult(
+            selection=TierSelection(tier=tier, reason="labeled (cost measurement)", plan=plan),
+            usage=real.usage,
+        )
 
 
 def _add(a: TokenUsage, b: TokenUsage) -> TokenUsage:
@@ -45,16 +71,17 @@ def main() -> None:
     retriever = Retriever(store, OllamaEmbedder(s.ollama_host, s.embed_model), s.confidence_threshold)
     catalog = catalog_index(load_item_details(s.item_details_path))
     verifier = Verifier(build_llm(s, 1)) if s.verify_answers else None
-    orch = Orchestrator(Router(build_llm(s, 1), temperature=s.router_temperature), retriever, catalog,
-                        llm_for=lambda t: build_llm(s, t), verifier=verifier,
-                        tier3_max_steps=s.tier3_max_steps)
+    plan_map = {q: (t, p) for q, t, p in TAXONOMY}
+    router = OracleRouter(build_llm(s, 1), plan_map, temperature=s.router_temperature)
+    orch = Orchestrator(router, retriever, catalog, llm_for=lambda t: build_llm(s, t),
+                        verifier=verifier, tier3_max_steps=s.tier3_max_steps)
 
     billed = {1: TokenUsage(), 2: TokenUsage(), 3: TokenUsage()}   # tokens billed at each tier
     total = TokenUsage()
     answer_total = TokenUsage()                                    # answer-generation only (planner+synth)
     print("per-query split (answer-gen = executor; overhead = router+verifier @ Tier-1):")
     print("  tier | answer in/out | overhead in/out | query")
-    for q in QUERIES:
+    for q, _t, _p in TAXONOMY:
         res = orch.run(q)
         for t, u in res.usage_by_tier.items():
             billed[t] = _add(billed[t], u)
