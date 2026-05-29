@@ -22,7 +22,7 @@ def test_no_webhook_call_when_url_empty(monkeypatch):
     # assert the alerter does not call out when no URL is configured.
     called = {"n": 0}
     import tiered_rag.alerting as al
-    monkeypatch.setattr(al.httpx, "post", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    monkeypatch.setattr(al, "post_with_retry", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     Alerter(webhook_url="").alert(GapAlert(kind="abstain", query="q", answer="a"))
     assert called["n"] == 0
 
@@ -32,7 +32,7 @@ def test_webhook_failure_is_swallowed(monkeypatch):
 
     def _boom(*a, **k):
         raise RuntimeError("network down")
-    monkeypatch.setattr(al.httpx, "post", _boom)
+    monkeypatch.setattr(al, "post_with_retry", _boom)
     # must not raise
     Alerter(webhook_url="http://example.test/hook").alert(
         GapAlert(kind="unverified", query="q", answer="a"))

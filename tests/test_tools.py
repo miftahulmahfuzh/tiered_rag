@@ -34,3 +34,17 @@ def test_unknown_tool_raises_keyerror():
     import pytest
     with pytest.raises(KeyError):
         run_tool("no_such_tool", {}, CATALOG)
+
+
+def test_item_tools_accept_sku_and_synonym_keys():
+    # The planner often keys item lookups as 'sku' or 'item_id_or_sku' (the menu
+    # wording invites it); the tool must resolve them, not blow up on args["item_id"].
+    for args in ({"sku": "SKU-07"}, {"item_id_or_sku": "SKU-07"}, {"item_id": "SKU-07"}):
+        assert run_tool("get_item_details_from_xlsx", args, CATALOG)["name"] == "Dragon Skin"
+    assert run_tool("check_item_price", {"sku": "7"}, CATALOG)["price_usd"] == 19.99
+
+
+def test_item_tool_with_no_recognizable_id_key_raises():
+    import pytest
+    with pytest.raises(KeyError):
+        run_tool("get_item_details_from_xlsx", {"foo": "bar"}, CATALOG)

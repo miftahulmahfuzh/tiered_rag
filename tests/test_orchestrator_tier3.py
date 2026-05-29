@@ -64,3 +64,18 @@ def test_tier3_unknown_tool_does_not_crash():
     steps = [{"instruction": "do a weird thing", "tool": "bogus", "args": {}}]
     res = Tier3Executor(_chain_llm(steps), retriever=None, catalog=CATALOG).execute("weird")
     assert "error" in res.tool_calls[0]["result"]
+
+
+def test_tier3_existing_tool_with_bad_args_is_not_mislabeled_unknown_tool():
+    steps = [{"instruction": "look up the item", "tool": "get_item_details_from_xlsx",
+              "args": {"foo": "bar"}}]
+    res = Tier3Executor(_chain_llm(steps), retriever=None, catalog=CATALOG).execute("details")
+    err = res.tool_calls[0]["result"]["error"]
+    assert "unknown tool" not in err and "bad arguments" in err
+
+
+def test_tier3_resolves_sku_keyed_item_lookup():
+    steps = [{"instruction": "look up the item", "tool": "get_item_details_from_xlsx",
+              "args": {"sku": "SKU-07"}}]
+    res = Tier3Executor(_chain_llm(steps), retriever=None, catalog=CATALOG).execute("details for SKU-07")
+    assert res.tool_calls[0]["result"]["name"] == "Dragon Skin"

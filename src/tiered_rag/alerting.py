@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 
-import httpx
+from .http import post_with_retry, shared_client
 
 logger = logging.getLogger("tiered_rag.alerts")
 
@@ -36,6 +36,10 @@ class Alerter:
         logger.warning("knowledge_gap %s", json.dumps(asdict(gap)))
         if self.webhook_url:
             try:
-                httpx.post(self.webhook_url, json=asdict(gap), timeout=2.0)
+                # best-effort and runs in a background task — pooled client + a
+                # single retry rides a brief DNS blip without hanging the worker.
+                client = shared_client(f"alert:{self.webhook_url}", 2.0)
+                post_with_retry(client, self.webhook_url, json=asdict(gap),
+                                max_retries=1, retry_backoff=0.5)
             except Exception:  # best-effort; alerting must never raise into the request path
                 logger.exception("knowledge-gap webhook failed")

@@ -11,7 +11,7 @@ from .llm.client import LLMClient
 from .llm.usage import LLMResponse, TokenUsage
 from .retrieval import Retriever
 from .router import Router, _extract_json
-from .tools.registry import TOOLS, run_tool
+from .tools.registry import TOOLS
 from .verifier import Verifier
 
 I_DONT_KNOW = ("I'm sorry, I don't have enough information to answer that. "
@@ -73,7 +73,20 @@ class Tier1Executor:
 
 
 def _tool_menu() -> str:
-    return "\n".join(f"- {t.name}: {t.description}" for t in TOOLS.values())
+    return "\n".join(f"- {t.name}: {t.description} args {t.args}" for t in TOOLS.values())
+
+
+def _dispatch(name: str, args: dict, catalog: dict) -> dict:
+    """Run a planned tool call, never crashing the pipeline. An unrecognised tool
+    *name* and a recognised tool called with *bad arguments* are distinct failures
+    — conflating them is what mislabeled a missing arg key as "unknown tool"."""
+    tool = TOOLS.get(name)
+    if tool is None:
+        return {"error": f"unknown tool: {name}"}
+    try:
+        return tool.run(args, catalog)
+    except Exception as e:
+        return {"error": f"bad arguments for {name}: {e}"}
 
 
 TIER2_PLAN_SYSTEM = (
@@ -143,12 +156,7 @@ class Tier2Executor:
         plan, plan_usage = self._plan(query)
         tool_calls: list[dict] = []
         for call in plan.calls:
-            try:
-                result = run_tool(call.tool, call.args, self.catalog)
-            except KeyError:
-                result = {"error": f"unknown tool: {call.tool}"}
-            except Exception as e:  # bad args, etc. — never crash the pipeline
-                result = {"error": str(e)}
+            result = _dispatch(call.tool, call.args, self.catalog)
             tool_calls.append({"tool": call.tool, "args": call.args, "result": result})
 
         context = _format_context(tool_calls)
@@ -186,12 +194,7 @@ class Tier3Executor:
             call = {"step": i, "tool": "retrieve", "args": step.args, "result": result}
             return f"[step {i}] retrieve -> {json.dumps(result)}", call, TokenUsage()
         if step.tool:
-            try:
-                result = run_tool(step.tool, step.args, self.catalog)
-            except KeyError:
-                result = {"error": f"unknown tool: {step.tool}"}
-            except Exception as e:  # bad args, etc. — never crash the chain
-                result = {"error": str(e)}
+            result = _dispatch(step.tool, step.args, self.catalog)
             call = {"step": i, "tool": step.tool, "args": step.args, "result": result}
             return f"[step {i}] {step.tool}({step.args}) -> {json.dumps(result)}", call, TokenUsage()
         # reasoning step: thread the running transcript forward

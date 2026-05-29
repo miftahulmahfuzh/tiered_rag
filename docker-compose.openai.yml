@@ -38,4 +38,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     extra_hosts: ["host.docker.internal:host-gateway"]
+    # Pin public resolvers — WSL2's embedded DNS intermittently fails with
+    # "No address associated with hostname"; the retry in OpenAICompatLLM is the
+    # second line of defence.
+    dns: ["8.8.8.8", "1.1.1.1"]
     depends_on: [redis, qdrant]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import httpx
+from .http import post_with_retry, shared_client
 
 
 def extract_message(update: dict) -> tuple[int, str] | None:
@@ -19,14 +19,18 @@ def extract_message(update: dict) -> tuple[int, str] | None:
 class TelegramClient:
     """Thin httpx client for the Telegram Bot API (no SDK), mirroring OpenAICompatLLM."""
 
-    def __init__(self, token: str, api_base: str = "https://api.telegram.org", timeout: float = 10.0):
+    def __init__(self, token: str, api_base: str = "https://api.telegram.org", timeout: float = 10.0,
+                 max_retries: int = 4, retry_backoff: float = 0.5):
         self.token, self.api_base, self.timeout = token, api_base.rstrip("/"), timeout
+        self.max_retries, self.retry_backoff = max_retries, retry_backoff
+        self._client = shared_client(f"telegram:{token}", timeout)
 
     def _url(self, method: str) -> str:
         return f"{self.api_base}/bot{self.token}/{method}"
 
-    def _post(self, method: str, payload: dict) -> dict:
-        r = httpx.post(self._url(method), json=payload, timeout=self.timeout)
+    def _post(self, method: str, payload: dict | None = None) -> dict:
+        r = post_with_retry(self._client, self._url(method), json=payload,
+                            max_retries=self.max_retries, retry_backoff=self.retry_backoff)
         r.raise_for_status()
         return r.json()
 
@@ -34,9 +38,7 @@ class TelegramClient:
         return self._post("sendMessage", {"chat_id": chat_id, "text": text})
 
     def get_me(self) -> dict:
-        r = httpx.post(self._url("getMe"), timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._post("getMe")
 
     def set_webhook(self, url: str, secret: str = "") -> dict:
         payload = {"url": url}
@@ -48,6 +50,4 @@ class TelegramClient:
         return self._post("deleteWebhook", {})
 
     def get_webhook_info(self) -> dict:
-        r = httpx.post(self._url("getWebhookInfo"), timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        return self._post("getWebhookInfo")

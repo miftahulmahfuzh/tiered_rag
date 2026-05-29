@@ -4,7 +4,7 @@ import hashlib
 import math
 from typing import Protocol
 
-import httpx
+from .http import post_with_retry, shared_client
 
 
 class Embedder(Protocol):
@@ -43,14 +43,19 @@ class FakeEmbedder:
 class OllamaEmbedder:
     """Real embeddings via ollama. Prepends the nomic task prefixes internally."""
 
-    def __init__(self, host: str, model: str, timeout: float = 60.0):
+    def __init__(self, host: str, model: str, timeout: float = 60.0,
+                 max_retries: int = 4, retry_backoff: float = 0.5):
         self.host, self.model, self.timeout = host.rstrip("/"), model, timeout
+        self.max_retries, self.retry_backoff = max_retries, retry_backoff
+        self._client = shared_client(f"ollama:{self.host}", timeout)
 
     def _embed(self, inputs: list[str]) -> list[list[float]]:
-        r = httpx.post(
+        r = post_with_retry(
+            self._client,
             f"{self.host}/api/embed",
             json={"model": self.model, "input": inputs},
-            timeout=self.timeout,
+            max_retries=self.max_retries,
+            retry_backoff=self.retry_backoff,
         )
         r.raise_for_status()
         return r.json()["embeddings"]

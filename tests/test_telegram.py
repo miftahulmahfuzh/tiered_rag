@@ -20,13 +20,35 @@ def test_client_builds_method_urls_and_posts(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {"ok": True, "result": {"message_id": 7}}
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None):
         calls["url"], calls["json"] = url, json
         return _Resp()
 
-    monkeypatch.setattr("tiered_rag.telegram.httpx.post", fake_post)
     c = TelegramClient("123:ABC", "https://api.telegram.org", timeout=5.0)
+    monkeypatch.setattr(c._client, "post", fake_post)
     out = c.send_message(42, "hello")
     assert calls["url"] == "https://api.telegram.org/bot123:ABC/sendMessage"
     assert calls["json"] == {"chat_id": 42, "text": "hello"}
     assert out["ok"] is True
+
+
+def test_send_message_retries_transient_dns_error(monkeypatch):
+    """Delivery to Telegram must survive a transient WSL2 DNS blip, not crash the
+    background task (the SKU-06 failure: answer generated, delivery died)."""
+    import httpx
+    calls = {"n": 0}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"ok": True}
+
+    def fake_post(url, json=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ConnectError("[Errno -3] Temporary failure in name resolution")
+        return _Resp()
+
+    c = TelegramClient("999:RETRY", timeout=5.0, max_retries=3, retry_backoff=0.0)
+    monkeypatch.setattr(c._client, "post", fake_post)
+    assert c.send_message(42, "hi")["ok"] is True
+    assert calls["n"] == 3

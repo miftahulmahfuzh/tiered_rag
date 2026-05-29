@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
-import httpx
-
+from ..http import post_with_retry, shared_client
 from .usage import LLMResponse, TokenUsage
 
 
@@ -32,16 +31,20 @@ class OpenAICompatLLM:
     Real OpenAI in Phase 2; the Phase-3 mock tier servers implement the same API.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0,
+                 max_retries: int = 4, retry_backoff: float = 0.5):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self._client = shared_client(api_key, timeout, {"Authorization": f"Bearer {api_key}"})
 
     def complete(self, system: str, user: str, *, temperature: float = 0.0) -> LLMResponse:
-        r = httpx.post(
+        r = post_with_retry(
+            self._client,
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
             json={
                 "model": self.model,
                 "temperature": temperature,
@@ -50,7 +53,8 @@ class OpenAICompatLLM:
                     {"role": "user", "content": user},
                 ],
             },
-            timeout=self.timeout,
+            max_retries=self.max_retries,
+            retry_backoff=self.retry_backoff,
         )
         r.raise_for_status()
         data = r.json()
