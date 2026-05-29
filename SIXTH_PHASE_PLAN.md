@@ -1,5 +1,12 @@
 # Phase 6 — Tier-3 Multi-Step Reasoning — Implementation Plan
 
+> **✅ STATUS: COMPLETE (2026-05-29).** All four tasks landed on `main` via TDD (RED → GREEN → commit):
+> `db7a6f0` (schema + prompts + config) · `ce02baf` (`Tier3Executor`) · `3e8de77` (orchestrator wiring +
+> guardrail) · `0527517` (Tier-3 mock + integration test + README). **96 passed, 1 skipped** with the
+> mock servers up (the skip is the pre-existing Phase-1 RAG test needing a live Qdrant collection — not a
+> Phase-6 regression); **91 passed** offline. Every DoD box below is checked. See the README "Phase 6 —
+> Tier-3 Multi-Step Reasoning" section for the live `/chat` example. **Next plan: `SEVENTH_PHASE_PLAN.md`.**
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:executing-plans to
 > implement this plan task-by-task. Use superpowers-extended-cc:test-driven-development
 > for every task (RED → GREEN → COMMIT).
@@ -580,19 +587,24 @@ git commit -m "feat(p6): Tier-3-aware mock + chain integration test + README"
 
 ## Phase 6 Definition of Done
 
-- [ ] `pytest -m "not integration"` → all green, fully offline (FakeLLM + in-memory Qdrant + TestClient).
-- [ ] **`Tier3Executor`** generates/consumes a chained plan: ordered steps with **context threading**
+- [x] `pytest -m "not integration"` → all green, fully offline (FakeLLM + in-memory Qdrant + TestClient).
+      **91 passed.**
+- [x] **`Tier3Executor`** generates/consumes a chained plan: ordered steps with **context threading**
       (step N's output is in step N+1's prompt), supporting **tool**, **retrieve**, and **reasoning**
       steps; bounded by `tier3_max_steps`; degrade-to-empty + never-crash on bad plans/tools.
-- [ ] Final synthesis is **grounded in the transcript** (`FAQ_SYSTEM` over `final_input_context`); chain
+      **Covered by `tests/test_orchestrator_tier3.py` (6 tests).**
+- [x] Final synthesis is **grounded in the transcript** (`FAQ_SYSTEM` over `final_input_context`); chain
       usage (plan + reasoning steps + synth) **folds into** `ExecutionResult.usage`.
-- [ ] `Orchestrator.run` runs the chain for tier 3 (**stub removed**); the **Phase-5 guardrail applies
+- [x] `Orchestrator.run` runs the chain for tier 3 (**stub removed**); the **Phase-5 guardrail applies
       to Tier 3 unchanged** — an unsupported chain answer escalates to "Pending Human Specialist Review".
-- [ ] `/chat` returns real Tier-3 answers with aggregated usage + `verified`/`pending_review`; all
-      Phase-1–5 tests stay green (the old `test_orchestrator_tier3_is_stub` is replaced, not skipped).
-- [ ] Tier-3 mock recognises `TIER3_PLAN_MARKER` (guard test in sync with `TIER3_PLAN_SYSTEM`);
-      `pytest -m integration` runs the live-mock Tier-3 chain (skips if down).
-- [ ] README Phase-6 section written. All work committed.
+      **`test_tier3_unverified_is_escalated` proves the escalation path.**
+- [x] `/chat` returns real Tier-3 answers with aggregated usage + `verified`/`pending_review`; all
+      Phase-1–5 tests stay green (the old `test_orchestrator_tier3_is_stub` is replaced, not skipped —
+      now `test_orchestrator_tier3_runs_real_chain`).
+- [x] Tier-3 mock recognises `TIER3_PLAN_MARKER` (guard test in sync with `TIER3_PLAN_SYSTEM`);
+      `pytest -m integration` runs the live-mock Tier-3 chain (`test_pipeline_tier3_chain_via_mocks`,
+      passed with mocks up; skips if down).
+- [x] README Phase-6 section written. All work committed.
 
 **Next:** write `SEVENTH_PHASE_PLAN.md` (High-Scale Engineering) — **Redis semantic caching** (embed the
 query, look up a near-duplicate in a Qdrant/Redis cache, serve the cached response on a hit), **health
