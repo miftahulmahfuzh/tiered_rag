@@ -7,6 +7,3 @@ qdrant_storage/
 *.egg-info/
 build/
 dist/
-
-# EIGHTH_PHASE_PLAN.md is gitignored because it contains TELEGRAM_BOT_TOKEN
-EIGHTH_PHASE_PLAN.md
