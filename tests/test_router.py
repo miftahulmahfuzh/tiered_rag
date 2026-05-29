@@ -46,6 +46,15 @@ def test_route_detailed_exposes_usage():
     assert res.usage.total_tokens > 0
 
 
+def test_router_prompt_disambiguates_howto_from_id_keyed_lookup():
+    # Fix 2: generic how-to questions are tier-1 FAQ even when about orders/accounts;
+    # tier-2 is reserved for queries carrying a concrete identifier to look up.
+    from tiered_rag.router import ROUTER_SYSTEM
+    s = ROUTER_SYSTEM.lower()
+    assert "how do i" in s            # gives the model an explicit how-to example
+    assert "identifier" in s          # tier-2 gate is "a concrete identifier is present"
+
+
 def test_tier1_plan_is_an_intent_label():
     canned = json.dumps({"tier": 1, "reason": "greeting", "plan": "greeting"})
     sel = Router(FakeLLM(canned)).route("hi there!")

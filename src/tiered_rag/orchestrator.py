@@ -101,6 +101,7 @@ TIER2_PLAN_SYSTEM = (
 
 # Stable plan labels carried to the output for tier 2/3 (tier-1 labels live in the router).
 TIER2_PLAN_LABEL = "tool_pipeline"
+TIER2_FALLBACK_LABEL = "rag_fallback"   # planner found no applicable tool -> answered from the KB
 TIER3_PLAN_LABEL = "multi_step_chain"
 
 
@@ -148,8 +149,8 @@ def _format_context(tool_calls: list[dict]) -> str:
 
 
 class Tier2Executor:
-    def __init__(self, llm: LLMClient, catalog: dict):
-        self.llm, self.catalog = llm, catalog
+    def __init__(self, llm: LLMClient, catalog: dict, retriever: Retriever | None = None):
+        self.llm, self.catalog, self.retriever = llm, catalog, retriever
 
     def _plan(self, query: str) -> tuple[Tier2Plan, TokenUsage]:
         resp = self.llm.complete(TIER2_PLAN_SYSTEM, query)
@@ -159,6 +160,24 @@ class Tier2Executor:
             plan = Tier2Plan(calls=[])
         return plan, resp.usage
 
+    def _add_usage(self, base: TokenUsage, extra: TokenUsage) -> TokenUsage:
+        return TokenUsage(base.prompt_tokens + extra.prompt_tokens,
+                          base.completion_tokens + extra.completion_tokens)
+
+    def _fallback_to_kb(self, query: str, plan_usage: TokenUsage) -> ExecutionResult:
+        """No applicable tool — a likely-misrouted FAQ. Answer from the KB instead of
+        synthesising over empty context (which only ever yields a dead-end 'I don't know').
+        If the KB also has nothing, abstain so the guardrail fires a knowledge-gap alert."""
+        rr = self.retriever.retrieve(query)
+        if rr.abstain:
+            return ExecutionResult(tier=2, answer=I_DONT_KNOW, plan=TIER2_FALLBACK_LABEL,
+                                   abstained=True, usage=plan_usage)
+        context = rr.answer or ""
+        synth = synthesize(self.llm, FAQ_SYSTEM, context, query)
+        return ExecutionResult(tier=2, answer=synth.content, final_input_context=context,
+                               usage=self._add_usage(plan_usage, synth.usage),
+                               plan=TIER2_FALLBACK_LABEL)
+
     def execute(self, query: str) -> ExecutionResult:
         plan, plan_usage = self._plan(query)
         tool_calls: list[dict] = []
@@ -166,14 +185,14 @@ class Tier2Executor:
             result = _dispatch(call.tool, call.args, self.catalog)
             tool_calls.append({"tool": call.tool, "args": call.args, "result": result})
 
+        if not tool_calls and self.retriever is not None:
+            return self._fallback_to_kb(query, plan_usage)
+
         context = _format_context(tool_calls)
         synth = synthesize(self.llm, FAQ_SYSTEM, context, query)
-        usage = TokenUsage(
-            plan_usage.prompt_tokens + synth.usage.prompt_tokens,
-            plan_usage.completion_tokens + synth.usage.completion_tokens,
-        )
         return ExecutionResult(tier=2, answer=synth.content, final_input_context=context,
-                               tool_calls=tool_calls, steps=tool_calls, usage=usage,
+                               tool_calls=tool_calls, steps=tool_calls,
+                               usage=self._add_usage(plan_usage, synth.usage),
                                plan=TIER2_PLAN_LABEL)
 
 
@@ -264,7 +283,7 @@ class Orchestrator:
         route = self.router.route_detailed(query)
         sel = route.selection
         if sel.tier == 2:
-            res = Tier2Executor(self.llm_for(2), self.catalog).execute(query)
+            res = Tier2Executor(self.llm_for(2), self.catalog, self.retriever).execute(query)
         elif sel.tier == 3:
             res = Tier3Executor(self.llm_for(3), self.retriever, self.catalog,
                                 self.tier3_max_steps).execute(query)

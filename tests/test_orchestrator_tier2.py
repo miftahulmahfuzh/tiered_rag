@@ -1,7 +1,10 @@
 import json
 
 from tiered_rag.llm.client import FakeLLM
-from tiered_rag.orchestrator import Tier2Executor
+from tiered_rag.orchestrator import Orchestrator, Tier2Executor
+from tiered_rag.router import Router
+
+from tests._helpers import build_retriever
 
 CATALOG = {"7": {"item_id": 7, "sku": "SKU-07", "name": "Dragon Skin",
                  "price_usd": 19.99, "rarity": "Legendary", "stock": 42, "category": "Cosmetic"},
@@ -82,3 +85,53 @@ def test_tier2_unparseable_plan_yields_empty_plan():
     ex = Tier2Executor(FakeLLM("not json at all"), CATALOG)
     res = ex.execute("status of order #1?")
     assert res.tool_calls == []
+
+
+# --- Fix 1 + Fix 3: no applicable tool -> RAG fallback, then abstain if the KB also misses ---
+
+def test_tier2_empty_plan_falls_back_to_kb(fake_embedder):
+    # planner finds no applicable tool -> fall back to RAG so an in-KB answer is still served
+    res = Tier2Executor(_planner([]), CATALOG, build_retriever(fake_embedder)).execute(
+        "how do I reset my password")
+    assert res.tool_calls == []
+    assert res.plan == "rag_fallback"
+    assert res.abstained is False
+    assert "Open Settings > Security > Reset." in res.final_input_context
+    assert "Open Settings > Security > Reset." in res.answer
+
+
+def test_tier2_empty_plan_with_kb_miss_abstains(fake_embedder):
+    # no tool AND nothing in the KB -> abstain (so a gap alert can fire), not a silent "I don't know"
+    from tiered_rag.orchestrator import I_DONT_KNOW
+    res = Tier2Executor(_planner([]), CATALOG, build_retriever(fake_embedder)).execute(
+        "airspeed velocity of an unladen swallow")
+    assert res.abstained is True
+    assert res.answer == I_DONT_KNOW
+    assert res.tool_calls == []
+
+
+def test_tier2_with_tool_calls_unaffected_by_fallback(fake_embedder):
+    # when a tool DOES apply, behaviour is unchanged: tool_pipeline label + real steps
+    calls = [{"tool": "get_item_details_from_xlsx", "args": {"item_id": "SKU-07"}}]
+    res = Tier2Executor(_planner(calls), CATALOG, build_retriever(fake_embedder)).execute(
+        "details for SKU-07")
+    assert res.plan == "tool_pipeline"
+    assert res.tool_calls[0]["result"]["name"] == "Dragon Skin"
+
+
+def _tier2_orchestrator(fake_embedder, llm):
+    router = Router(FakeLLM(json.dumps({"tier": 2, "reason": "x", "plan": None})))
+    return Orchestrator(router, build_retriever(fake_embedder), CATALOG, llm_for=lambda t: llm)
+
+
+def test_orchestrator_tier2_empty_plan_kb_hit_answers_from_kb(fake_embedder):
+    res = _tier2_orchestrator(fake_embedder, _planner([])).run("how do I reset my password")
+    assert res.tier == 2 and res.plan == "rag_fallback"
+    assert "Open Settings > Security > Reset." in res.answer
+    assert res.gap is None
+
+
+def test_orchestrator_tier2_empty_plan_kb_miss_fires_abstain_gap(fake_embedder):
+    res = _tier2_orchestrator(fake_embedder, _planner([])).run("airspeed of an unladen swallow")
+    assert res.tier == 2 and res.abstained is True
+    assert res.gap is not None and res.gap.kind == "abstain"

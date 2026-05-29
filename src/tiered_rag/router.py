@@ -24,9 +24,14 @@ Classify the user's message into exactly ONE tier, then reply with ONLY a JSON o
 
 Tiers:
 - 1 = a greeting, a simple FAQ answerable from a knowledge base, or a single
-  classification/label request.
-- 2 = needs a function call or structured data lookup: order status, item price or
-  item details, or account tier.
+  classification/label request. Generic how-to or informational questions are
+  tier 1 EVEN WHEN they mention orders, billing, or accounts — e.g. "How do I
+  track my order?" or "How do I create a new account?" These are answered from
+  the knowledge base, not from a live lookup.
+- 2 = needs a live function call / structured data lookup keyed by a CONCRETE
+  identifier the user supplies: an order id (order status), an item id or SKU
+  (item price or item details), or an account id (account tier). If the message
+  carries no such identifier, it is NOT tier 2 — prefer tier 1.
 - 3 = complex multi-step troubleshooting, or a sensitive/escalation complaint.
 
 For tier 1, set "plan" to the intent: "greeting", "faq", or "classification".
