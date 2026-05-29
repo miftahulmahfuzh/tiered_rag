@@ -39,6 +39,30 @@ class Settings(BaseSettings):
     # --- Tier-3 multi-step reasoning (Phase 6) ---
     tier3_max_steps: int = 5               # bound the chain length (cost/latency guard)
 
+    # --- High-scale engineering (Phase 7) ---
+    cache_enabled: bool = True
+    redis_url: str = "redis://localhost:6379/0"
+    cache_similarity_threshold: float = 0.95   # near-duplicate queries only (high bar -> safe hits)
+    cache_ttl_seconds: int = 3600
+    cache_max_entries: int = 512               # bound the brute-force scan
+    cache_key_prefix: str = "tiered_rag:cache"
+
+    # multiple workers per tier (comma-separated); empty -> the single mock_tier{N}_base_url
+    mock_tier1_workers: str = ""
+    mock_tier2_workers: str = ""
+    mock_tier3_workers: str = ""
+    health_check_timeout: float = 2.0
+
+    def tier_workers(self, tier: int) -> list[str]:
+        raw = {1: self.mock_tier1_workers, 2: self.mock_tier2_workers,
+               3: self.mock_tier3_workers}.get(tier, "")
+        urls = [u.strip() for u in raw.split(",") if u.strip()]
+        if urls:
+            return urls
+        single = {1: self.mock_llm_base_url, 2: self.mock_tier2_base_url,
+                  3: self.mock_tier3_base_url}.get(tier, self.mock_llm_base_url)
+        return [single]
+
 
 def get_settings() -> Settings:
     return Settings()

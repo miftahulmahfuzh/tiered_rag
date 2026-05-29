@@ -54,3 +54,30 @@ def test_phase6_tier3_max_steps_default():
     s = Settings()
     assert s.tier3_max_steps == 5
     assert s.tier3_max_steps > 0
+
+
+def test_phase7_cache_defaults():
+    s = Settings()
+    assert s.cache_enabled is True
+    assert 0.0 < s.cache_similarity_threshold <= 1.0
+    assert s.cache_ttl_seconds > 0 and s.cache_max_entries > 0
+    assert s.redis_url.startswith("redis://")
+    assert s.cache_key_prefix  # non-empty
+
+
+def test_phase7_worker_and_health_defaults():
+    s = Settings()
+    # empty by default -> build_llm falls back to the single per-tier base url (Phase-3 behaviour)
+    assert s.mock_tier1_workers == "" and s.mock_tier2_workers == "" and s.mock_tier3_workers == ""
+    assert s.health_check_timeout > 0
+
+
+def test_phase7_worker_list_parses(monkeypatch):
+    monkeypatch.setenv("MOCK_TIER1_WORKERS", "http://a:9101/v1, http://b:9111/v1")
+    assert Settings().tier_workers(1) == ["http://a:9101/v1", "http://b:9111/v1"]
+
+
+def test_phase7_worker_list_falls_back_to_single_url():
+    s = Settings()
+    assert s.tier_workers(1) == [s.mock_llm_base_url]      # no workers configured -> single tier-1 url
+    assert s.tier_workers(2) == [s.mock_tier2_base_url]
