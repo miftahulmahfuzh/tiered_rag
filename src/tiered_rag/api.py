@@ -126,7 +126,7 @@ def process_query(
         hit = cache.get(query)
         if hit is not None:
             usage_log.record(
-                tier=hit["tier"], model=settings.openai_model,
+                tier=hit["tier"], model=settings.model_for_tier(hit["tier"]),
                 usage=TokenUsage(0, 0), latency_ms=0.0, settings=settings, cached=True,
             )
             return ChatResponse(
@@ -140,7 +140,7 @@ def process_query(
     res = orchestrator.run(query)
     latency_ms = (time.perf_counter() - t0) * 1000.0
     rec = usage_log.record(
-        tier=res.tier, model=settings.openai_model,
+        tier=res.tier, model=settings.model_for_tier(res.tier),
         usage=res.usage, latency_ms=latency_ms, settings=settings,
         usage_by_tier=res.usage_by_tier, answer_usage=res.answer_usage,
     )

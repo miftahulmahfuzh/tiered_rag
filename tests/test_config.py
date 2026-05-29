@@ -18,7 +18,7 @@ def test_env_override(monkeypatch):
 def test_llm_defaults():
     s = Settings()
     assert s.llm_type == "openai"
-    assert s.openai_model  # non-empty default
+    assert all(s.model_for_tier(t) for t in (1, 2, 3))   # every tier has a non-empty default model
     assert s.openai_base_url.startswith("http")
     assert s.mock_llm_base_url.startswith("http")
     assert s.router_temperature == 0.0
@@ -29,18 +29,17 @@ def test_llm_type_override(monkeypatch):
     assert Settings().llm_type == "mock"
 
 
-def test_model_for_tier_falls_back_to_openai_model():
-    s = Settings(openai_model="base")
-    assert s.model_for_tier(1) == "base"
-    assert s.model_for_tier(2) == "base"
-    assert s.model_for_tier(3) == "base"
+def test_model_for_tier_reads_each_tier_independently():
+    s = Settings(openai_tier1_model="nano", openai_tier2_model="mini", openai_tier3_model="full")
+    assert s.model_for_tier(1) == "nano"
+    assert s.model_for_tier(2) == "mini"
+    assert s.model_for_tier(3) == "full"
 
 
-def test_model_for_tier_uses_per_tier_override():
-    s = Settings(openai_model="base", openai_tier2_model="pro", openai_tier3_model="frontier")
-    assert s.model_for_tier(1) == "base"        # unset -> falls back
-    assert s.model_for_tier(2) == "pro"
-    assert s.model_for_tier(3) == "frontier"
+def test_the_three_tier_models_are_the_only_model_settings():
+    # the single global openai_model knob was purged for clarity — the 3 per-tier
+    # settings are the only OpenAI model configuration.
+    assert not hasattr(Settings(), "openai_model")
 
 
 def test_phase3_mock_and_cost_defaults():

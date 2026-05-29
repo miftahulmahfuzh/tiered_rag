@@ -28,7 +28,7 @@ def test_fake_llm_callable_sees_prompts():
 
 def test_build_llm_openai_backend():
     s = Settings(llm_type="openai", openai_base_url="http://x/v1",
-                 openai_api_key="k", openai_model="m")
+                 openai_api_key="k", openai_tier1_model="m")
     llm = build_llm(s)
     assert isinstance(llm, OpenAICompatLLM)
     assert llm.base_url == "http://x/v1" and llm.model == "m"
@@ -50,8 +50,8 @@ def test_build_llm_mock_tier_selects_port():
 
 def test_build_llm_openai_respects_per_tier_models():
     s = Settings(llm_type="openai", openai_base_url="http://x/v1", openai_api_key="k",
-                 openai_model="base", openai_tier2_model="pro", openai_tier3_model="frontier")
-    assert build_llm(s, 1).model == "base"      # unset tier-1 -> falls back to openai_model
+                 openai_tier1_model="base", openai_tier2_model="pro", openai_tier3_model="frontier")
+    assert build_llm(s, 1).model == "base"
     assert build_llm(s, 2).model == "pro"
     assert build_llm(s, 3).model == "frontier"
 

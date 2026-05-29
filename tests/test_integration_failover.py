@@ -21,8 +21,8 @@ def test_failover_to_live_worker_when_first_is_down():
     s = get_settings()
     if not _up(s.mock_llm_base_url):
         pytest.skip("tier-1 mock server not running on :9101")
-    down = OpenAICompatLLM("http://localhost:59999/v1", "mock-key", s.openai_model, timeout=2.0)
-    live = OpenAICompatLLM(s.mock_llm_base_url, "mock-key", s.openai_model, timeout=5.0)
+    down = OpenAICompatLLM("http://localhost:59999/v1", "mock-key", s.model_for_tier(1), timeout=2.0)
+    live = OpenAICompatLLM(s.mock_llm_base_url, "mock-key", s.model_for_tier(1), timeout=5.0)
     pool = FailoverLLM([down, live])
     resp = pool.complete("You are a support agent.", "hello there")
     assert isinstance(resp, LLMResponse) and resp.content        # the live worker answered

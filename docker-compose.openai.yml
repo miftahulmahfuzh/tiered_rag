@@ -36,12 +36,12 @@ services:
       LLM_TYPE: openai
       # real model — key lives only in the host .env; model/base-url overridable, with sane defaults
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-nano}
-      # Per-tier model overrides; empty -> falls back to OPENAI_MODEL for that tier.
-      # Set them to different models (e.g. nano/mini/full) to make the staging engine real.
-      OPENAI_TIER1_MODEL: ${OPENAI_TIER1_MODEL:-}
-      OPENAI_TIER2_MODEL: ${OPENAI_TIER2_MODEL:-}
-      OPENAI_TIER3_MODEL: ${OPENAI_TIER3_MODEL:-}
+      # The three per-tier models are the ONLY OpenAI model settings. They're set to the
+      # same model here (one model behind every tier); change any one to a cheaper/pricier
+      # model (e.g. nano / mini / full) to make the staging engine physically real.
+      OPENAI_TIER1_MODEL: gpt-5.4-nano
+      OPENAI_TIER2_MODEL: gpt-5.4-nano
+      OPENAI_TIER3_MODEL: gpt-5.4-nano
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333

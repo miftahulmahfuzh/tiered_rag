@@ -13,12 +13,11 @@ class Settings(BaseSettings):
     # --- LLM backend (Phase 2+) ---
     llm_type: str = "openai"  # "openai" | "mock"
     openai_api_key: str = ""
-    openai_model: str = "gpt-5.4-nano"          # default for every tier unless overridden below
-    # Per-tier model overrides; empty -> fall back to openai_model. Set all three to the same
-    # value to run one model behind every tier (the current default behaviour).
-    openai_tier1_model: str = ""
-    openai_tier2_model: str = ""
-    openai_tier3_model: str = ""
+    # The three per-tier models are the ONLY OpenAI model settings. Set them to the same value
+    # to run one model behind every tier, or to a cheap->expensive split to make staging real.
+    openai_tier1_model: str = "gpt-5.4-nano"
+    openai_tier2_model: str = "gpt-5.4-nano"
+    openai_tier3_model: str = "gpt-5.4-nano"
     openai_base_url: str = "https://api.openai.com/v1"
     mock_llm_base_url: str = "http://localhost:9101/v1"  # Tier-1 mock; servers wired in Phase 3
     router_temperature: float = 0.0
@@ -64,10 +63,9 @@ class Settings(BaseSettings):
     telegram_api_base: str = "https://api.telegram.org"
 
     def model_for_tier(self, tier: int) -> str:
-        """The OpenAI model name for a tier — the per-tier override if set, else openai_model."""
-        override = {1: self.openai_tier1_model, 2: self.openai_tier2_model,
-                    3: self.openai_tier3_model}.get(tier, "")
-        return override or self.openai_model
+        """The OpenAI model name configured for a tier (defaults to the tier-1 model)."""
+        return {1: self.openai_tier1_model, 2: self.openai_tier2_model,
+                3: self.openai_tier3_model}.get(tier, self.openai_tier1_model)
 
     def tier_workers(self, tier: int) -> list[str]:
         raw = {1: self.mock_tier1_workers, 2: self.mock_tier2_workers,
