@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     tier2_cost_multiplier: float = 3.0   # tier-1 baseline is 1.0
     tier3_cost_multiplier: float = 10.0
 
+    # --- Tier-2 structured extraction (Phase 4) ---
+    item_details_path: str = "xlsx/item_details.xlsx"
+
 
 def get_settings() -> Settings:
     return Settings()

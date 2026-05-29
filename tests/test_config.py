@@ -38,3 +38,7 @@ def test_phase3_mock_and_cost_defaults():
     assert s.cost_input_per_1k > 0 and s.cost_output_per_1k > 0
     # deeper tiers are simulated as more expensive
     assert s.tier3_cost_multiplier > s.tier2_cost_multiplier > 1.0
+
+
+def test_phase4_item_details_path_default():
+    assert Settings().item_details_path.endswith("item_details.xlsx")
