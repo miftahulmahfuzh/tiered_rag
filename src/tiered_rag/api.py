@@ -142,6 +142,7 @@ def process_query(
     rec = usage_log.record(
         tier=res.tier, model=settings.openai_model,
         usage=res.usage, latency_ms=latency_ms, settings=settings,
+        usage_by_tier=res.usage_by_tier,
     )
     if res.gap is not None:
         background_tasks.add_task(alerter.alert, res.gap)   # async knowledge-gap alert

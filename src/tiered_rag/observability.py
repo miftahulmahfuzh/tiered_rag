@@ -17,6 +17,13 @@ def estimate_cost(tier: int, usage: TokenUsage, settings: Settings) -> float:
     return round(base * multiplier.get(tier, 1.0), 8)
 
 
+def estimate_cost_breakdown(usage_by_tier: dict[int, TokenUsage], settings: Settings) -> float:
+    """Cost each stage at the multiplier of the model that actually ran it. The router and
+    verifier run on the tier-1 model; the planner + synthesizer on the route tier — so a
+    tier-2 request is NOT a single tier-2 bill, it's tier-1 work + tier-2 work summed."""
+    return round(sum(estimate_cost(t, u, settings) for t, u in usage_by_tier.items()), 8)
+
+
 @dataclass
 class UsageRecord:
     tier: int
@@ -36,14 +43,19 @@ class UsageLog:
         self.records: list[UsageRecord] = []
 
     def record(self, *, tier: int, model: str, usage: TokenUsage,
-               latency_ms: float, settings: Settings, cached: bool = False) -> UsageRecord:
+               latency_ms: float, settings: Settings, cached: bool = False,
+               usage_by_tier: dict[int, TokenUsage] | None = None) -> UsageRecord:
+        # When a per-stage breakdown is supplied, bill each stage at its own tier's
+        # multiplier; otherwise fall back to charging the whole usage at `tier`.
+        cost = (estimate_cost_breakdown(usage_by_tier, settings) if usage_by_tier
+                else estimate_cost(tier, usage, settings))
         rec = UsageRecord(
             tier=tier,
             model=model,
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
-            cost_usd=estimate_cost(tier, usage, settings),
+            cost_usd=cost,
             latency_ms=round(latency_ms, 2),
             cached=cached,
         )

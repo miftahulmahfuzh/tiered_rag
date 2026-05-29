@@ -25,6 +25,28 @@ def test_usage_log_accumulates_and_emits(caplog):
     assert any("usage" in m for m in caplog.messages)
 
 
+def test_estimate_cost_breakdown_sums_each_tier_at_its_own_multiplier():
+    from tiered_rag.observability import estimate_cost_breakdown
+    s = Settings()
+    bt = {1: TokenUsage(1000, 0), 2: TokenUsage(1000, 0)}
+    expected = round(estimate_cost(1, TokenUsage(1000, 0), s)
+                     + estimate_cost(2, TokenUsage(1000, 0), s), 8)
+    assert estimate_cost_breakdown(bt, s) == expected
+    # cheaper than lumping the whole 2000 tokens at the route tier (2 -> 3x)
+    assert estimate_cost_breakdown(bt, s) < estimate_cost(2, TokenUsage(2000, 0), s)
+
+
+def test_record_uses_breakdown_when_supplied():
+    s, log = Settings(), UsageLog()
+    from tiered_rag.observability import estimate_cost_breakdown
+    bt = {1: TokenUsage(100, 50), 2: TokenUsage(100, 50)}
+    rec = log.record(tier=2, model="mock", usage=TokenUsage(200, 100),
+                     latency_ms=5, settings=s, usage_by_tier=bt)
+    assert rec.cost_usd == estimate_cost_breakdown(bt, s)
+    assert rec.cost_usd < estimate_cost(2, TokenUsage(200, 100), s)   # router/verifier no longer at 3x
+    assert rec.total_tokens == 300                                    # grand total unchanged
+
+
 def test_savings_vs_all_tier3_is_positive_when_routing_cheaply():
     from tiered_rag.config import Settings
     from tiered_rag.llm.usage import TokenUsage

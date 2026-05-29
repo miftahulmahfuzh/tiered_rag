@@ -36,6 +36,7 @@ class ExecutionResult:
     steps: list[dict] = field(default_factory=list)   # full ordered plan surfaced to the output
 
     usage: TokenUsage = field(default_factory=TokenUsage)
+    usage_by_tier: dict[int, TokenUsage] = field(default_factory=dict)  # billing-tier -> tokens
     reason: str = ""
     plan: str | None = None
     verified: bool | None = None          # None = not applicable/not run
@@ -142,6 +143,18 @@ class ChainStep(BaseModel):
 
 class Tier3Plan(BaseModel):
     steps: list[ChainStep] = []
+
+
+def _bump(by_tier: dict[int, TokenUsage], tier: int, u: TokenUsage) -> None:
+    """Add `u` into the billing bucket for `tier` (created on first touch)."""
+    cur = by_tier.get(tier, TokenUsage())
+    by_tier[tier] = TokenUsage(cur.prompt_tokens + u.prompt_tokens,
+                               cur.completion_tokens + u.completion_tokens)
+
+
+def _total_usage(by_tier: dict[int, TokenUsage]) -> TokenUsage:
+    return TokenUsage(sum(u.prompt_tokens for u in by_tier.values()),
+                      sum(u.completion_tokens for u in by_tier.values()))
 
 
 def _format_context(tool_calls: list[dict]) -> str:
@@ -270,8 +283,7 @@ class Orchestrator:
             return res
         if res.final_input_context and self.verifier is not None:
             verdict, vusage = self.verifier.verify(query, res.answer, res.final_input_context)
-            res.usage = TokenUsage(res.usage.prompt_tokens + vusage.prompt_tokens,
-                                   res.usage.completion_tokens + vusage.completion_tokens)
+            _bump(res.usage_by_tier, 1, vusage)   # verifier runs on the tier-1 model
             res.verified = verdict.supported
             if not verdict.supported:
                 res.gap = GapAlert(kind="unverified", query=query, answer=res.answer,
@@ -290,12 +302,14 @@ class Orchestrator:
         else:
             res = Tier1Executor(self.retriever, self.llm_for(1)).execute(query, sel.plan)
 
-        res = self._guardrail(query, res)
+        executor_usage = res.usage   # every executor LLM call ran on the route-tier model
+        res = self._guardrail(query, res)   # may add verifier tokens into the tier-1 bucket
+
+        # Per-stage billing: route-tier work at its tier, router (always tier-1) at tier-1.
+        _bump(res.usage_by_tier, res.tier, executor_usage)
+        _bump(res.usage_by_tier, 1, route.usage)
+        res.usage = _total_usage(res.usage_by_tier)   # grand total = sum of the breakdown
 
         res.reason = sel.reason
         res.plan = res.plan if res.plan is not None else sel.plan
-        res.usage = TokenUsage(
-            res.usage.prompt_tokens + route.usage.prompt_tokens,
-            res.usage.completion_tokens + route.usage.completion_tokens,
-        )
         return res
