@@ -358,3 +358,112 @@ network. The one `@integration` test drives `/chat` end-to-end through the live 
 
 > **Result (2026-05-29):** the full offline suite is green; the `/chat` pipeline runs end-to-end
 > through the live mock servers (Tier-2 structured-extraction path) with aggregated token usage.
+
+---
+
+## Phase 5 — Zero-Hallucination Guardrails
+
+Phase 4 produces a real answer **plus the exact evidence it was built from**
+(`ExecutionResult.final_input_context` + `tool_calls`). Phase 5 inserts a **guardrail stage**
+between synthesis and the user so the chatbot **provably refuses to hallucinate**: a cheap LLM
+**verifier** checks the answer against its evidence, and a **knowledge-gap alerter** escalates
+anything the system cannot answer safely.
+
+```
+<tier executor> → ExecutionResult{answer, final_input_context, tool_calls, usage, abstained}
+   │
+   ▼  ┌──────────────────────── GUARDRAIL (Orchestrator._guardrail) ───────────────────────┐
+   │  │ 1. abstained?  (retrieval below threshold)                                          │
+   │  │       → GapAlert(kind="abstain") ; reply stays the honest "I don't know"            │
+   │  │ 2. has evidence AND a verifier is wired?                                             │
+   │  │       verdict = Verifier.verify(query, answer, evidence)  (+usage folded in)         │
+   │  │       supported    → keep answer ; verified=True                                     │
+   │  │       NOT supported → GapAlert(kind="unverified") ; verified=False ;                 │
+   │  │                       answer := PENDING_REVIEW                                        │
+   │  │ 3. no evidence (greeting/classification/T3 stub) → skip (verified=None)              │
+   │  └──────────────────────────────────────────────────────────────────────────────────┘
+   ▼  ExecutionResult{…, verified: bool|None, gap: GapAlert|None}
+   ▼  /chat → if res.gap: BackgroundTasks.add_task(alerter.alert, res.gap)   # async, after reply
+           → ChatResponse{…, verified, pending_review}
+```
+
+### Verifier agent — grounded answer check, **fail-closed**
+
+`tiered_rag.verifier.Verifier.verify(query, answer, evidence) -> (Verdict, TokenUsage)` makes **one**
+LLM call with a strict grounding instruction (`VERIFIER_SYSTEM`) asking for JSON
+`{"supported": bool, "reason": str}`. The reply is parsed with the Phase-2 tolerant `_extract_json`.
+
+- The verifier is built from the **cheapest tier** (`llm_for(1)`) — grounding is a yes/no check — and
+  its usage **folds into `ExecutionResult.usage`**, so the Phase-7 cost math sees the true
+  per-request cost *including the guardrail call*.
+- **Fail-closed:** on any parse/validation failure it returns
+  `Verdict(supported=False, reason="verifier parse failure (fail-closed)")`. An unparseable verdict
+  means "we cannot prove this is grounded", so the answer is **not** served. Safety over availability.
+- **Opt-in by construction:** `Orchestrator(..., verifier: Verifier | None = None)`. When the verifier
+  is `None`, verification is skipped (`verified` stays `None`) — production wires a real verifier only
+  when `settings.verify_answers` is true (the default).
+
+### Knowledge-gap alerting — two kinds, one channel, two replies
+
+`tiered_rag.alerting.Alerter` mirrors the Phase-3 `UsageLog`: every `GapAlert` is (1) appended to an
+in-memory `alerts` list (test hook + inspection), (2) logged as a structured JSON line on the
+`tiered_rag.alerts` logger, and (3) — if `ALERT_WEBHOOK_URL` is set — POSTed to that webhook
+**best-effort** (errors swallowed; alerting must never break a request).
+
+| Gap kind | When | User-facing reply |
+|---|---|---|
+| `abstain` | retrieval found nothing usable (out of scope) | the honest **"I don't know"** (Phase-1 contract preserved) |
+| `unverified` | we had sources but the answer drifted off them | **"Pending Human Specialist Review"** (`PENDING_REVIEW`) |
+
+Both fire the same async alert so the KB can grow; the `kind` field distinguishes them downstream.
+Verification only runs when there **is** evidence — greeting, classification, and the Tier-3 stub carry
+an empty `final_input_context` and bypass the verifier (`verified=None`); it applies to Tier-1 **FAQ**
+(grounded in the retrieved KB answer) and **Tier-2** (grounded in the formatted tool results).
+
+### Async dispatch from `/chat`
+
+The guardrail *decision* lives in the `Orchestrator` (it owns the answer); the alert *I/O* lives in the
+API. `create_app` builds an app-scoped `Alerter(settings.alert_webhook_url)` on `app.state` (like
+`UsageLog`). `/chat` takes FastAPI `BackgroundTasks` and, **only if `res.gap is not None`**, schedules
+`background_tasks.add_task(alerter.alert, res.gap)` — so alerting fires *after* the response is sent and
+never blocks the reply. `ChatResponse` gains two fields:
+
+- `verified`: `true` / `false` / `null` (not applicable / not run).
+- `pending_review`: `true` when the answer was escalated (`gap.kind == "unverified"`).
+
+```bash
+uvicorn tiered_rag.api:app --reload
+
+# An in-scope answer that drifts off its sources is escalated, not served:
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+     -d '{"query":"how do I reset my password?"}'
+# -> {"tier":1,"reason":"...","plan":"faq",
+#     "answer":"This needs a human specialist. I've flagged it for review (Pending Human
+#                Specialist Review) and someone will follow up shortly.",
+#     "usage":{...},"verified":false,"pending_review":true}
+# (and an async knowledge_gap alert is logged on the `tiered_rag.alerts` logger)
+```
+
+### Verifier-aware mock
+
+The Tier-1 mock already returns routing JSON when it sees `ROUTER_MARKER`. It now also returns a
+deterministic **supported** verdict when it sees `VERIFIER_MARKER` (a stable substring of
+`VERIFIER_SYSTEM`, pinned by a guard test), so the live-mock pipeline never spuriously escalates. The
+verifier is *meaningfully* exercised on the `LLM_TYPE=openai` path and in the offline guardrail tests
+(which inject approving/rejecting verifiers directly).
+
+### Tests
+
+```bash
+pytest -m "not integration"      # all offline (FakeLLM + in-memory Qdrant + TestClient)
+# bring the Phase-3 mocks up, then:
+pytest -m integration            # pipeline + Phase-1/2/3; skips what's down
+```
+
+`TestClient` runs `BackgroundTasks` synchronously on response, so tests assert `app.state.alerter.alerts`
+after a `/chat` call. The fail-closed verifier, the two gap kinds, the `verified`/`pending_review`
+fields, and the verifier-aware mock are all covered offline.
+
+> **Result (2026-05-29):** full offline suite green (FakeLLM + in-memory Qdrant + `TestClient`); the
+> guardrail runs end-to-end through the live mock servers without spuriously escalating
+> (`pending_review=false` on the mock path).

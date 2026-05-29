@@ -29,6 +29,9 @@ def _reply(tier: int, system: str, user: str) -> str:
     if ROUTER_MARKER in system:
         chosen = _classify(user)
         return json.dumps({"tier": chosen, "reason": f"mock tier-{chosen} (deterministic)", "plan": None})
+    from .verifier import VERIFIER_MARKER
+    if VERIFIER_MARKER in system:
+        return json.dumps({"supported": True, "reason": "mock verifier (deterministic)"})
     return f"[mock tier-{tier}] deterministic answer for: {user[:80]}"
 
 
