@@ -38,26 +38,108 @@ top-level map, the per-phase sections that follow are the detailed record.
                                         usage_log → /usage, /stats (cost-savings)  (Phase 3→7)
 ```
 
-## Quick Start
+## Quick Start — zero to chatting on Telegram
+
+This is the **real, end-to-end** path, including the gotchas. Prerequisites: Docker + Compose,
+[ollama](https://ollama.com), Python 3.12 (conda is fine), and (for Telegram) [ngrok](https://ngrok.com).
+Three helper scripts in the repo root automate the fiddly bits: **`deploy_ollama.sh`**,
+**`docker-cleanup.sh`**, **`clear_cache.sh`**.
+
+### 1. Python deps + install the package
 
 ```bash
-# 1. dependencies + the whole stack (Qdrant + Redis + mock LLM workers + gateway on :8000)
-pip install -r requirements.txt
-cp .env.example .env                       # then fill in secrets (see below) — .env is gitignored
-docker compose up -d --build
-
-# 2. embeddings model + knowledge base
-ollama pull nomic-embed-text:v1.5          # ollama must be running (`ollama serve`)
-python -m tiered_rag.ingest                # load xlsx/knowledge_base.xlsx into Qdrant
-
-# 3. talk to it
-curl -s localhost:8000/healthz                                            # {"status":"ok"}
-curl -s localhost:8000/chat -H 'content-type: application/json' \
-     -d '{"query":"how do I reset my password?"}'
+pip install -r requirements.txt           # runtime deps + pytest
+pip install -e .                           # REQUIRED: src-layout package, else `python -m tiered_rag.*` fails
 ```
 
-`LLM_TYPE=mock` (the compose default) makes every answer deterministic and fully offline;
-set `LLM_TYPE=openai` + `OPENAI_API_KEY` in `.env` to put a real model behind all three tiers.
+> The package lives under `src/tiered_rag/`, so installing `requirements.txt` alone is not enough —
+> `pip install -e .` is what makes `tiered_rag` importable (`python -m tiered_rag.ingest`).
+
+### 2. Config — create `.env` (it does NOT exist in a fresh clone; it's gitignored)
+
+```bash
+cp .env.example .env                       # the repo ships only the template; create your own .env
+```
+
+For the **mock backend (the compose default) you need no secrets** — every answer is deterministic
+and fully offline. For Telegram, fill these two in `.env` (see step 6):
+
+```bash
+TELEGRAM_BOT_TOKEN=<token-from-BotFather>
+TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 16)
+```
+
+(Set `LLM_TYPE=openai` + `OPENAI_API_KEY` to put a real model behind all three tiers instead.)
+
+### 3. ollama — serve it so containers can reach it, and pull the embed model
+
+```bash
+./deploy_ollama.sh                         # binds 0.0.0.0:11434 (container-reachable) + pulls nomic-embed-text:v1.5
+```
+
+> **Why the script, not plain `ollama serve`:** ollama defaults to `127.0.0.1`, which is **not**
+> reachable from inside a container (the gateway reaches the host at `host.docker.internal`). A
+> localhost-only ollama makes every FAQ/cache query fail with `httpx.ConnectError: Connection refused`.
+> `deploy_ollama.sh` is idempotent — re-run it anytime (e.g. after a reboot).
+
+### 4. Bring up the stack
+
+```bash
+docker compose up -d --build              # Qdrant + Redis + mock LLM workers + gateway on :8000
+```
+
+> **Port already in use?** (`failed to bind host port for 0.0.0.0:8000 … address already in use`) —
+> usually a stray `uvicorn` you launched by hand. Clear it and retry:
+> `./docker-cleanup.sh --ports` (tears down the stack and frees host ports), then `docker compose up -d --build`.
+
+### 5. Load the knowledge base + smoke-test
+
+```bash
+python -m tiered_rag.ingest               # load xlsx/knowledge_base.xlsx into Qdrant (re-runnable; never duplicates)
+curl -s localhost:8000/healthz                                            # {"status":"ok"}
+curl -s localhost:8000/chat -H 'content-type: application/json' \
+     -d '{"query":"how do I reset my password?"}'                          # real tiered answer
+```
+
+If `/chat` returns an answer with a `usage` block, the backend is fully working. **Stop here if you
+only need the HTTP API.** Continue for Telegram.
+
+### 6. Telegram — token, tunnel, webhook
+
+```bash
+# (a) get a token from @BotFather, put it in .env (TELEGRAM_BOT_TOKEN=...), then restart the gateway
+#     so compose injects the new token into the container:
+docker compose up -d gateway
+
+# (b) expose the gateway publicly. ngrok MUST point at port 8000 (the gateway), not anything else.
+#     If you have a reserved domain, bind it so the webhook URL stays stable:
+ngrok http 8000
+#   or, with a reserved static domain:
+ngrok http --url=<your-subdomain>.ngrok-free.dev 8000
+
+# (c) register the webhook (reads token + secret from .env, confirms via getWebhookInfo):
+python scripts/set_telegram_webhook.py --url https://<id>.ngrok-free.app
+```
+
+Now message your bot in Telegram. Watch it live with `docker compose logs -f gateway`.
+
+> **Telegram gotchas we hit:**
+> - The gateway needs `TELEGRAM_BOT_TOKEN` to *send* replies, and compose only injects it at `up` time —
+>   if you add the token to `.env` after the gateway is already running, **restart it** (`docker compose up -d gateway`).
+> - Point ngrok at **`8000`**. Forwarding to the wrong port makes Telegram deliver to nothing (you'll see "method not allowed").
+> - WSL2 sometimes throws a transient DNS error (`Temporary failure in name resolution`) when calling the Bot API — just retry.
+
+### 7. Changed answer logic? Flush the cache
+
+The gateway caches served answers in Redis, so after editing prompts / the mock / the KB you may get
+**stale** replies. Clear them:
+
+```bash
+./clear_cache.sh                          # redis-cli FLUSHALL inside the compose redis service
+```
+
+**Local-dev fallback (no ngrok)** — long-poll instead of a public webhook (delete the webhook first,
+they conflict): `python scripts/telegram_poll.py --gateway http://localhost:8000`.
 
 ## Endpoints
 
@@ -112,6 +194,17 @@ out-of-scope questions, **100% routing accuracy** (real model) / **88%** (determ
 users**.
 
 ## Tests
+
+> ⚠️ **Move `.env` aside before running the offline suite.** `Settings` (pydantic-settings) loads
+> `.env`, and a few config/secret tests assert the **defaults** (e.g. empty `telegram_bot_token`,
+> empty `alert_webhook_url`). A populated `.env` makes those tests fail and a set
+> `TELEGRAM_WEBHOOK_SECRET` makes the webhook tests reject the test request. So:
+>
+> ```bash
+> mv .env .env.bak     # hide secrets/overrides so tests see clean defaults
+> pytest -m "not integration"
+> mv .env.bak .env     # restore
+> ```
 
 ```bash
 pytest -m "not integration"   # fast, fully offline (in-memory Qdrant + FakeEmbedder + FakeLLM + TestClient)
