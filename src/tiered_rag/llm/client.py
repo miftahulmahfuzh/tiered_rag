@@ -4,9 +4,11 @@ from typing import Callable, Protocol
 
 import httpx
 
+from .usage import LLMResponse, TokenUsage
+
 
 class LLMClient(Protocol):
-    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> str: ...
+    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> "LLMResponse": ...
 
 
 class FakeLLM:
@@ -19,10 +21,9 @@ class FakeLLM:
     def __init__(self, responder: str | Callable[[str, str], str]):
         self.responder = responder
 
-    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> str:
-        if callable(self.responder):
-            return self.responder(system, user)
-        return self.responder
+    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> LLMResponse:
+        content = self.responder(system, user) if callable(self.responder) else self.responder
+        return LLMResponse(content=content, usage=TokenUsage.estimate(system + user, content))
 
 
 class OpenAICompatLLM:
@@ -37,7 +38,7 @@ class OpenAICompatLLM:
         self.model = model
         self.timeout = timeout
 
-    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> str:
+    def complete(self, system: str, user: str, *, temperature: float = 0.0) -> LLMResponse:
         r = httpx.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -52,7 +53,14 @@ class OpenAICompatLLM:
             timeout=self.timeout,
         )
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        content = data["choices"][0]["message"]["content"]
+        u = data.get("usage") or {}
+        if "prompt_tokens" in u and "completion_tokens" in u:
+            usage = TokenUsage(u["prompt_tokens"], u["completion_tokens"])
+        else:
+            usage = TokenUsage.estimate(system + user, content)
+        return LLMResponse(content=content, usage=usage)
 
 
 def build_llm(settings) -> LLMClient:

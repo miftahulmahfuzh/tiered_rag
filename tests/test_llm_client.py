@@ -3,13 +3,11 @@ from tiered_rag.llm.client import FakeLLM, OpenAICompatLLM, build_llm
 
 
 def test_fake_llm_fixed_string():
-    llm = FakeLLM("hello")
-    assert llm.complete("sys", "user") == "hello"
+    assert FakeLLM("hello").complete("sys", "user").content == "hello"
 
 
 def test_fake_llm_callable_sees_prompts():
-    llm = FakeLLM(lambda system, user: f"{system}|{user}")
-    assert llm.complete("S", "U") == "S|U"
+    assert FakeLLM(lambda system, user: f"{system}|{user}").complete("S", "U").content == "S|U"
 
 
 def test_build_llm_openai_backend():

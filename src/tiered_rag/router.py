@@ -44,7 +44,7 @@ class Router:
         self.llm, self.temperature = llm, temperature
 
     def route(self, query: str) -> TierSelection:
-        raw = self.llm.complete(ROUTER_SYSTEM, query, temperature=self.temperature)
+        raw = self.llm.complete(ROUTER_SYSTEM, query, temperature=self.temperature).content
         try:
             return TierSelection(**_extract_json(raw))
         except Exception:
