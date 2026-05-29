@@ -48,7 +48,7 @@ def abstention_block(s) -> None:
 
 
 def routing_block(s) -> None:
-    print(f"## Routing accuracy (Phase 2 — LLM_TYPE={s.llm_type}, model={s.openai_model})\n")
+    print(f"## Routing accuracy (LLM_TYPE={s.llm_type}, model={s.model_for_tier(1)})\n")
     try:
         router = Router(build_llm(s, 1), temperature=s.router_temperature)
         m = eval_routing(router, ROUTING_QUESTIONS)
