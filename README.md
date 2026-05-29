@@ -16,20 +16,20 @@ top-level map, the per-phase sections that follow are the detailed record.
    POST /telegram/webhook ──(secret check)──►  process_query(query)   ◄── single source of truth
                  │  background reply                      │
                  │                                        ▼
-                 │                 ┌──────────── SEMANTIC CACHE (Phase 7) ───────────┐
+                 │                 ┌──────────── SEMANTIC CACHE (Phase 7) ─────────────┐
                  │                 │ embed → cosine ≥ threshold → HIT: serve @0 tokens │
                  │                 └───────────────────────┬───────────────────────────┘
                  │                                         │ MISS
                  │                                         ▼
                  │                          Orchestrator.run(query)
-                 │           ┌──────────────────────────────────────────────────────┐
+                 │           ┌─────────────────────────────────────────────────────────┐
                  │           │  Tier-1 router LLM → tier ∈ {1,2,3}      (Phase 2)      │
                  │           │   ├─ T1: greeting / FAQ(+RAG) / classify  (Phase 4)     │
                  │           │   ├─ T2: LLM-planned tool pipeline        (Phase 4)     │
                  │           │   └─ T3: multi-step reasoning chain       (Phase 6)     │
                  │           │  build_llm → FailoverLLM worker pool      (Phase 7)     │
                  │           │  RAG: ollama nomic-embed + Qdrant, abstain (Phase 1)    │
-                 │           └───────────────────────┬──────────────────────────────┘
+                 │           └───────────────────────┬─────────────────────────────────┘
                  │                                   ▼
                  │                 GUARDRAIL: verifier + knowledge-gap alert (Phase 5)
                  │                  abstain → "I don't know" ; unsupported → "Pending Review"
@@ -487,16 +487,16 @@ anything the system cannot answer safely.
 ```
 <tier executor> → ExecutionResult{answer, final_input_context, tool_calls, usage, abstained}
    │
-   ▼  ┌──────────────────────── GUARDRAIL (Orchestrator._guardrail) ───────────────────────┐
+   ▼  ┌──────────────────────── GUARDRAIL (Orchestrator._guardrail) ────────────────────────┐
    │  │ 1. abstained?  (retrieval below threshold)                                          │
    │  │       → GapAlert(kind="abstain") ; reply stays the honest "I don't know"            │
-   │  │ 2. has evidence AND a verifier is wired?                                             │
-   │  │       verdict = Verifier.verify(query, answer, evidence)  (+usage folded in)         │
-   │  │       supported    → keep answer ; verified=True                                     │
-   │  │       NOT supported → GapAlert(kind="unverified") ; verified=False ;                 │
-   │  │                       answer := PENDING_REVIEW                                        │
-   │  │ 3. no evidence (greeting/classification/T3 stub) → skip (verified=None)              │
-   │  └──────────────────────────────────────────────────────────────────────────────────┘
+   │  │ 2. has evidence AND a verifier is wired?                                            │
+   │  │       verdict = Verifier.verify(query, answer, evidence)  (+usage folded in)        │
+   │  │       supported    → keep answer ; verified=True                                    │
+   │  │       NOT supported → GapAlert(kind="unverified") ; verified=False ;                │
+   │  │                       answer := PENDING_REVIEW                                      │
+   │  │ 3. no evidence (greeting/classification/T3 stub) → skip (verified=None)             │
+   │  └─────────────────────────────────────────────────────────────────────────────────────┘
    ▼  ExecutionResult{…, verified: bool|None, gap: GapAlert|None}
    ▼  /chat → if res.gap: BackgroundTasks.add_task(alerter.alert, res.gap)   # async, after reply
            → ChatResponse{…, verified, pending_review}
@@ -698,7 +698,7 @@ mock workers (exercised only under `@pytest.mark.integration`, which skips if a 
 ```
 POST /chat (query)
    │
-   ▼  ┌──────────────── SEMANTIC CACHE ────────────────┐
+   ▼  ┌──────────────── SEMANTIC CACHE ────────────── ──┐
    │  │ vec = embedder.embed_query(query)               │
    │  │ hit = nearest past query, cosine >= threshold   │
    │  └─────────────────────────────────────────────────┘
@@ -711,7 +711,7 @@ POST /chat (query)
    │        │                                   │
    │        │                                   ▼  cacheable? (served, not abstain/escalation) → cache.put
    │        ▼                                   ▼
-   └────────────── usage_log.record(…, cached) ──────────────┐
+   └────────────── usage_log.record(…, cached) ──── ──────────┐
    GET /usage → totals + cache hit-rate                       │
    GET /stats → per-tier breakdown + COST-SAVINGS vs all-Tier-3
    scripts/load_test.py → 100+ concurrent users → p50/p95/rps/errors
