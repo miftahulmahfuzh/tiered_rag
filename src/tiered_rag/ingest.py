@@ -3,11 +3,22 @@ from .vector_store import QdrantStore
 
 
 def ingest(rows: list[dict], store: QdrantStore, embedder: Embedder) -> int:
+    """Load the KB into Qdrant. Idempotent: re-running never spawns duplicates.
+
+    Two independent safeguards keep the collection at exactly len(rows) points
+    no matter how many times this runs:
+      1. ``store.recreate`` drops and recreates the collection first, so every
+         run rebuilds from empty (a clean, known-good state).
+      2. each point uses the row's stable ``id`` as its Qdrant point id, so even
+         a bare upsert overwrites the same id instead of appending a new point.
+    Note this is destructive by design: it wipes the collection before reload,
+    so any documents ingested from another source would also be cleared.
+    """
     vectors = embedder.embed_documents([r["question"] for r in rows])
-    store.recreate(dim=len(vectors[0]))
+    store.recreate(dim=len(vectors[0]))  # wipe + recreate -> no carryover from prior runs
     store.upsert([
         {
-            "id": r["id"],
+            "id": r["id"],  # stable point id -> re-upsert overwrites, never duplicates
             "vector": v,
             "payload": {
                 "question": r["question"],
